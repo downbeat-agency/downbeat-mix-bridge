@@ -13,6 +13,7 @@ const RESTART_CODE = 75;
 const FAST_EXIT_MS = 60 * 1000;
 const log = (m) => console.log(`${new Date().toISOString()} launcher: ${m}`);
 let fastExits = 0;
+let stopping = false;
 
 async function readState() {
   try { return JSON.parse(await readFile(join(dir, 'update-state.json'), 'utf8')); } catch { return {}; }
@@ -35,13 +36,17 @@ async function rollback(state) {
 function run() {
   const started = Date.now();
   const child = spawn(process.execPath, [join(dir, 'mix-bridge', 'src', 'index.js'), '--config', join(dir, 'config.json')], { stdio: 'inherit', cwd: dir });
-  const forward = (signal) => child.kill(signal);
+  // launchd stopping us (bootout, logout): stop the bridge and do not start it again.
+  const forward = (signal) => {
+    stopping = true;
+    child.kill(signal);
+  };
   process.once('SIGTERM', forward);
   process.once('SIGINT', forward);
   child.on('exit', async (code, signal) => {
     process.off('SIGTERM', forward);
     process.off('SIGINT', forward);
-    if (signal === 'SIGTERM' || signal === 'SIGINT') process.exit(0);
+    if (stopping || signal === 'SIGTERM' || signal === 'SIGINT') process.exit(0);
     if (code === RESTART_CODE) {
       log('restarting after update');
       fastExits = 0;
