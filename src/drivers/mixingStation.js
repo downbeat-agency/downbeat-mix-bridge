@@ -303,7 +303,14 @@ export class MixingStationDriver extends EventEmitter {
       }
     }
     const found = texts.find(([, v]) => /d\s*live|wing/i.test(v));
-    const detected = found ? (/wing/i.test(found[1]) ? 'wing' : 'dlive') : null;
+    // Mixing Station 3.2 sends no model text (seen on the Green dLive, 2026-11-08), so fall
+    // back to the channel layout: a dLive has 128 inputs and "FX Return" channels; a Wing has
+    // 40 inputs and "Aux" inputs.
+    const types = Array.isArray(info?.channelTypes) ? info.channelTypes : [];
+    const inputs = types.find((t) => t.type === 0)?.count ?? 0;
+    const hasAux = types.some((t) => /\baux\b/i.test(`${t.name ?? ''} ${t.shortName ?? ''}`));
+    const byLayout = inputs === 40 || (hasAux && inputs <= 48) ? 'wing' : inputs >= 64 ? 'dlive' : null;
+    const detected = found ? (/wing/i.test(found[1]) ? 'wing' : 'dlive') : byLayout;
     const configured = this.cfg.consoleModel && this.cfg.consoleModel !== 'auto' ? this.cfg.consoleModel : null;
     this.consoleModel = configured ?? detected ?? 'dlive';
     this.consoleName = found?.[1] ?? (this.consoleModel === 'wing' ? 'Wing' : 'dLive');

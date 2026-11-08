@@ -64,7 +64,7 @@ function fakeMixingStation({ users = { admin: '' }, info = {} } = {}) {
         }
         return reply(msg, null, 'Invalid credentials');
       }
-      if (msg.path === '/console/information') return reply(msg, { ...info, channelTypes: CHANNEL_TYPES });
+      if (msg.path === '/console/information') return reply(msg, { channelTypes: CHANNEL_TYPES, ...info });
       if (msg.path === '/console/mixTargets') return reply(msg, { targets: TARGETS });
       if (msg.path.startsWith('/console/data/definitions/')) return reply(msg, { definitions: { x: { definition: { min: -37, max: 37 } } } });
       if (msg.path === '/console/data/subscribe') {
@@ -259,6 +259,12 @@ test('console model comes from Mixing Station, so one install fits dLive and Win
     assert.equal(dlive.driver.snapshot().model, 'dlive');
   } finally {
     await dlive.close();
+  }
+  const layoutOnly = await setup({}, { info: { channelTypes: [{ type: 0, name: 'Channel', count: 40, offset: 0 }, { type: 1, name: 'Aux', count: 8, offset: 40 }] } });
+  try {
+    assert.equal(layoutOnly.driver.snapshot().model, 'wing', 'no model text: 40 inputs + aux is a Wing');
+  } finally {
+    await layoutOnly.close();
   }
   const forced = await setup({ consoleModel: 'wing' }, { info: { consoleName: 'dLive' } });
   try {

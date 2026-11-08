@@ -74,7 +74,7 @@ To publish: bump `version` in `package.json` and merge to main; `.github/workflo
 
 **Wing:** the Mixing Station API is the same across consoles, but the Wing channel and send layout has not been tested yet. Before a Wing show, check the bridge log's `console:` and `channel types:` lines and move a spare mix from a phone.
 
-Installed on the Green rig Mac Mini 2026-11-08 (no console attached yet).
+Green rig Mac Mini, 2026-11-08: installed, updated itself 0.2.0 → 0.2.1 → 0.2.2 from GitHub, connected to the dLive through Mixing Station. Read check from the Mac: 12 named stereo mixes (MC … PERC), 128 inputs (113 named) and 16 FX returns (FX 1 "W Vx Vrb", FX 2 "WVx Vrb2"); Mixing Station reports FX returns as channel type 3 "FX Return" at index 128. Mixing Station 3.2 sends no console model text, so the model comes from the channel layout.
 
 ## Layout
 
