@@ -1,0 +1,26 @@
+# Publishes a bridge release that every rig Mac Mini installs by itself the next time it
+# has internet and no phones connected. Bump "version" in package.json, then push a
+# matching tag: git tag v0.2.0 && git push origin v0.2.0
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tag matches package.json
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - run: node --test test/*.test.js
+      - name: Build rig bundle
+        run: mkdir -p dist && deploy/make-rig-bundle.sh dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/DownbeatMixBridge.tar.gz dist/SHA256SUMS --title "$GITHUB_REF_NAME" --generate-notes

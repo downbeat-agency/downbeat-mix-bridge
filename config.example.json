@@ -1,0 +1,16 @@
+{
+  "rigName": "dLive Green",
+  "port": 8790,
+  "driver": "mixingstation",
+  "sharedToken": "change-me-per-rig",
+  "allowedBuses": null,
+  "maxWritesPerSecond": 400,
+  "meterIntervalMs": 100,
+  "logDir": "/Users/Shared/DownbeatMix/logs",
+  "mixingStation": {
+    "wsUrl": "ws://127.0.0.1:8091/",
+    "auth": { "user": "admin", "password": "set-in-mixing-station" },
+    "maxInputs": null,
+    "meters": { "enabled": true, "intervalMs": 100 }
+  }
+}

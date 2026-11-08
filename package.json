@@ -1,0 +1,18 @@
+{
+  "name": "downbeat-mix-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Rig-side bridge that lets Downbeat iOS control personal IEM mixes through Mixing Station desktop",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "start:fake": "node src/index.js --driver fake",
+    "test": "node --test test/*.test.js",
+    "load": "node scripts/load-test.js",
+    "probe": "node scripts/ms-probe.js"
+  },
+  "license": "UNLICENSED"
+}
