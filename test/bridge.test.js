@@ -189,11 +189,14 @@ test('phones on a mix are told who else is on it, and when someone leaves', asyn
 });
 
 test('welcome lists the mixes so a phone can open on its own mix by name', async () => {
-  const rig = await startBridge({ bridgeOptions: { allowedBuses: [0, 1, 2] } });
+  const rig = await startBridge({ bridgeOptions: { allowedBuses: [0, 1, 2], version: '9.9.9' } });
   try {
     const c = await rig.client();
     c.send({ type: 'hello', personId: 'p' });
     const w = await c.next('welcome');
+    assert.equal(w.bridgeVersion, '9.9.9', 'phones show the bridge version');
+    assert.equal(rig.bridge.health().version, '9.9.9');
+    assert.equal(rig.bridge.isIdle(0), false, 'a phone is connected');
     assert.deepEqual(w.buses.map((b) => b.bus), [0, 1, 2]);
     assert.equal(w.buses[0].name, 'Stereo Mix 1 MC');
   } finally {

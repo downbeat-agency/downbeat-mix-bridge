@@ -67,7 +67,12 @@ cat > "$PLIST" <<PL
 </dict>
 </plist>
 PL
-launchctl bootout "gui/$(id -u)/com.downbeat.mixbridge" 2>/dev/null || true
+SERVICE="gui/$(id -u)/com.downbeat.mixbridge"
+if launchctl print "$SERVICE" >/dev/null 2>&1; then
+  launchctl bootout "$SERVICE" 2>/dev/null || true
+  # bootout returns before the old bridge has stopped; bootstrap fails (error 5) until it has.
+  for _ in $(seq 1 40); do launchctl print "$SERVICE" >/dev/null 2>&1 || break; sleep 0.25; done
+fi
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 sleep 3
 echo "--- health"

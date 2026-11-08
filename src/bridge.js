@@ -24,6 +24,7 @@ export class Bridge {
     this.driver = driver;
     this.opts = {
       rigName: options.rigName ?? 'Downbeat rig',
+      version: options.version ?? null,
       sharedToken: options.sharedToken ?? null,
       allowedBuses: options.allowedBuses ?? null, // null = every bus the driver reports
       flushIntervalMs: options.flushIntervalMs ?? 20,
