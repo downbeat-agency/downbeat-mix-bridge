@@ -70,7 +70,7 @@ Also on each rig:
 
 **Updates (no one touches the Mac Minis):** the bridge checks this repo's latest GitHub release every 12 hours (first check 2 minutes after start). If it is newer, and no phone has been connected for 10 minutes, it downloads `DownbeatMixBridge.tar.gz`, checks it against `SHA256SUMS`, swaps it in (the old version stays as `mix-bridge.previous`) and restarts. At gigs there is no internet, so the check just fails quietly; rigs update during the week at the warehouse. `deploy/launcher.js` (what the LaunchAgent runs) restarts the bridge after an update and, if the new version crashes three times within a minute of starting, puts the previous one back; that release is then skipped until a newer one comes out. Turn it off per rig with `"update": { "enabled": false }` in `config.json`.
 
-To publish: bump `version` in `package.json`, push a tag `vX.Y.Z`; `.github/workflows/release.yml` runs the tests, builds the bundle and creates the release. `/health` and the phone's welcome message report the running version.
+To publish: bump `version` in `package.json` and merge to main; `.github/workflows/release.yml` runs the tests, builds the bundle and creates release `vX.Y.Z` (skipped if that version is already released). `/health` and the phone's welcome message report the running version.
 
 **Wing:** the Mixing Station API is the same across consoles, but the Wing channel and send layout has not been tested yet. Before a Wing show, check the bridge log's `console:` and `channel types:` lines and move a spare mix from a phone.
 

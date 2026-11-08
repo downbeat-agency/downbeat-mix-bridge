@@ -1,10 +1,13 @@
 # Publishes a bridge release that every rig Mac Mini installs by itself the next time it
-# has internet and no phones connected. Bump "version" in package.json, then push a
-# matching tag: git tag v0.2.0 && git push origin v0.2.0
+# has internet and no phones connected. To release: bump "version" in package.json and
+# merge to main. If no release exists for that version yet, this tests, builds the
+# bundle and creates release vX.Y.Z (the tag is created here).
 name: Release
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: [package.json]
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
@@ -15,12 +18,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Tag matches package.json
-        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
-      - run: node --test test/*.test.js
-      - name: Build rig bundle
-        run: mkdir -p dist && deploy/make-rig-bundle.sh dist
-      - name: Publish release
+      - name: Version
+        id: v
+        run: echo "tag=v$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+      - name: Skip if already released
+        id: exists
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/DownbeatMixBridge.tar.gz dist/SHA256SUMS --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          if gh release view "${{ steps.v.outputs.tag }}" >/dev/null 2>&1; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.exists.outputs.found == 'false'
+        run: node --test test/*.test.js
+      - if: steps.exists.outputs.found == 'false'
+        name: Build rig bundle
+        run: mkdir -p dist && deploy/make-rig-bundle.sh dist
+      - if: steps.exists.outputs.found == 'false'
+        name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ steps.v.outputs.tag }}" dist/DownbeatMixBridge.tar.gz dist/SHA256SUMS --target "$GITHUB_SHA" --title "${{ steps.v.outputs.tag }}" --generate-notes
