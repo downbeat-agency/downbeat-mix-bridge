@@ -25,14 +25,15 @@ test('links neighbouring L/R inputs, left first', () => {
   assert.equal(links.get(2), 1);
 });
 
-test('same names stay separate unless the rig turns it on', () => {
-  const names = ['Guitar', 'Guitar', 'KeysTOP', 'KeysTOP', 'Ch 5', 'Ch 5'];
-  assert.deepEqual(pairs(findPairs(inputs(names))), []);
-  assert.deepEqual(pairs(findPairs(inputs(names), { sameName: true })), [[1, 2], [3, 4]], 'default names never pair');
+test('same-name neighbours pair by default; a rig can turn that off or unpair one', () => {
+  const names = ['Guitar', 'Guitar', 'KeysTOP', 'KeysTOP', 'Ch 5', 'Ch 5', 'Sax', 'Sax', 'Sax'];
+  assert.deepEqual(pairs(findPairs(inputs(names))), [[1, 2], [3, 4], [7, 8]], 'default names never pair; a third Sax stays single');
+  assert.deepEqual(pairs(findPairs(inputs(names), { sameName: false })), []);
+  assert.deepEqual(pairs(findPairs(inputs(names), { unpair: [[1, 2]] })), [[3, 4], [7, 8]]);
 });
 
 test('rig config adds and blocks pairs', () => {
-  const names = ['Guitar', 'Guitar', 'Keys L', 'Keys R', 'Synth', 'Synth'];
+  const names = ['Guitar', 'Bass', 'Keys L', 'Keys R', 'Synth', 'Pad'];
   const links = findPairs(inputs(names), { pairs: [[6, 5], [8, 9]], unpair: [[3, 4]] });
   assert.deepEqual(pairs(links), [[5, 6]], 'reversed order is fine; missing channels are ignored');
   assert.deepEqual(pairs(findPairs(inputs(names), { pairs: [[1, 3]] })), [[3, 4]], 'only neighbours pair');

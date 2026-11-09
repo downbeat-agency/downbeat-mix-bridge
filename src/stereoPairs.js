@@ -5,10 +5,11 @@
 //   1. config `pairs`  - input numbers the rig says are linked, e.g. [[17, 18]]
 //   2. config `unpair` - neighbours that must never be linked, e.g. [[13, 14]]
 //   3. auto: names that end in L and R with the same start ("Keys L"/"Keys R", "GtrL"/"GtrR")
-//   4. sameName (off by default): neighbours with exactly the same name. Off because two
-//      players can share a name ("13 Guitar", "14 Guitar").
+//   4. sameName (on by default): neighbours with exactly the same name ("KeysTOP" on 17 and
+//      18). Downbeat show files name both halves of a stereo input the same. A rig with two
+//      players on the same name lists them in `unpair`.
 
-export const DEFAULT_STEREO_PAIRS = { auto: true, sameName: false, pairs: [], unpair: [] };
+export const DEFAULT_STEREO_PAIRS = { auto: true, sameName: true, pairs: [], unpair: [] };
 
 /** { base, side: 'L' | 'R' } when a name ends in a left/right marker, else null. */
 export function sideOf(name) {
