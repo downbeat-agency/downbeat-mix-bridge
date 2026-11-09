@@ -94,3 +94,26 @@ test('a release that was rolled back is not installed again', async () => {
   const u2 = new Updater({ currentVersion: '0.1.0', installDir: dir, isIdle: () => true, log: () => {}, exit: () => {}, fetchImpl: next.fetchImpl, extract: fakeExtract });
   assert.equal((await u2.checkNow()).action, 'installed');
 });
+
+test('an update held back by connected phones is retried soon, not 12 hours later', async () => {
+  const dir = await rig();
+  const { fetchImpl, calls } = github();
+  let idle = false;
+  const exits = [];
+  const u = new Updater({
+    currentVersion: '0.1.0', installDir: dir, isIdle: () => idle, log: () => {}, exit: (c) => exits.push(c), fetchImpl, extract: fakeExtract,
+    config: { firstCheckAfterMs: 5, retryWhileBusyMs: 30, checkEveryMs: 60 * 60 * 1000 },
+  });
+  u.start();
+  try {
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(u.lastResult?.action, 'waiting');
+    idle = true;
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(u.lastResult?.action, 'installed');
+    assert.deepEqual(exits, [RESTART_CODE]);
+    assert.ok(calls.length >= 2);
+  } finally {
+    u.stop();
+  }
+});
