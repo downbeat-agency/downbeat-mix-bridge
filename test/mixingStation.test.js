@@ -227,9 +227,9 @@ test('FX returns follow the inputs with their own numbers and Mixing Station pat
   try {
     const s = driver.snapshot();
     assert.equal(s.model, 'dlive');
-    assert.deepEqual(s.channels[0], { ch: 0, kind: 'input', number: 1, name: 'Kick', color: 'yellow' });
-    assert.deepEqual(s.channels[4], { ch: 4, kind: 'fx_return', number: 1, name: 'Vox Verb', color: 'purple' });
-    assert.deepEqual(s.channels[5], { ch: 5, kind: 'fx_return', number: 2, name: 'FX 2', color: null });
+    assert.deepEqual(s.channels[0], { ch: 0, kind: 'input', number: 1, name: 'Kick', color: 'yellow', link: null });
+    assert.deepEqual(s.channels[4], { ch: 4, kind: 'fx_return', number: 1, name: 'Vox Verb', color: 'purple', link: null });
+    assert.deepEqual(s.channels[5], { ch: 5, kind: 'fx_return', number: 2, name: 'FX 2', color: null, link: null });
     assert.equal(s.values.get(paramKey(0, 4, 'level')), -10, 'ch.200 send into MC');
     await driver.set(0, 4, 'level', -6);
     assert.equal(ms.data.get('ch.200.mix.sends.4.lvl'), -6, 'phone ch 4 writes Mixing Station ch 200');
@@ -239,7 +239,7 @@ test('FX returns follow the inputs with their own numbers and Mixing Station pat
     assert.deepEqual(await change, { bus: 1, ch: 5, field: 'level', value: -2 });
     const layout = new Promise((r) => driver.once('layout', r));
     ms.push('ch.201.cfg.name', 'Plate');
-    assert.deepEqual((await layout).channels[0], { ch: 5, kind: 'fx_return', number: 2, name: 'Plate', color: null });
+    assert.deepEqual((await layout).channels[0], { ch: 5, kind: 'fx_return', number: 2, name: 'Plate', color: null, link: null });
     await assert.rejects(driver.set(0, 9, 'level', 0), /no channel/);
   } finally {
     await close();
@@ -290,6 +290,42 @@ test('mixer going offline in Mixing Station reports the console as disconnected'
     ms.mixerOffline();
     assert.equal((await status).connected, false);
     await assert.rejects(driver.set(0, 0, 'level', 0), /offline/);
+  } finally {
+    await close();
+  }
+});
+
+test('linked L/R inputs reach phones and follow renames', async () => {
+  const { driver, ms, close } = await setup();
+  try {
+    assert.equal(driver.snapshot().channels[2].link, null);
+    const layouts = [];
+    driver.on('layout', (l) => layouts.push(l));
+    ms.push('ch.2.cfg.name', 'Keys L');
+    ms.push('ch.3.cfg.name', 'Keys R');
+    await new Promise((r) => setTimeout(r, 80));
+    const s = driver.snapshot();
+    assert.equal(s.channels[2].link, 3);
+    assert.equal(s.channels[3].link, 2);
+    assert.equal(s.channels[4].link, null, 'FX returns stay single');
+    const last = layouts.at(-1).channels;
+    assert.deepEqual(last.map((c) => [c.ch, c.link]).sort(), [[2, 3], [3, 2]], 'both halves are sent');
+    assert.ok(last.every((c) => !('ms' in c)));
+
+    ms.push('ch.3.cfg.name', 'Organ');
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(driver.snapshot().channels[2].link, null, 'a rename breaks the pair');
+  } finally {
+    await close();
+  }
+});
+
+test('a rig can list its linked pairs by input number', async () => {
+  const { driver, close } = await setup({ stereoPairs: { pairs: [[1, 2]] } });
+  try {
+    const s = driver.snapshot();
+    assert.equal(s.channels[0].link, 1);
+    assert.equal(s.channels[1].link, 0);
   } finally {
     await close();
   }
