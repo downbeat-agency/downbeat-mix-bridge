@@ -47,6 +47,7 @@ function fakeMixingStation({ users = { admin: '' }, info = {} } = {}) {
     }
   }
   const conns = new Set();
+  let silent = false;
   const server = createServer();
   attachWebSocket(server, '/', (conn) => {
     conns.add(conn);
@@ -55,6 +56,7 @@ function fakeMixingStation({ users = { admin: '' }, info = {} } = {}) {
     const reply = (msg, body, error) => conn.send(JSON.stringify({ path: msg.path, method: msg.method, ...(error ? { error } : { body }) }));
     const push = (c, p) => c.send(JSON.stringify({ path: `/console/data/get/${p}`, method: 'GET', body: { fade: 0, format: 'val', value: data.get(p) } }));
     conn.on('message', (text) => {
+      if (silent) return;
       const msg = JSON.parse(text);
       if (msg.path === '/app/state') return reply(msg, { topState: 'connected', state: 'connected' });
       if (msg.path === '/auth/login') {
@@ -92,6 +94,11 @@ function fakeMixingStation({ users = { admin: '' }, info = {} } = {}) {
       data.set(p, v);
       for (const c of conns) c.send(JSON.stringify({ path: `/console/data/get/${p}`, method: 'GET', body: { fade: 0, format: 'val', value: v } }));
     },
+    /** Stop answering anything (an API that hangs) or start again. */
+    silence(on) {
+      silent = on;
+    },
+    connections: () => conns.size,
     mixerOffline() {
       for (const c of conns) c.send(JSON.stringify({ path: '/app/state', method: 'GET', body: { topState: 'connecting' } }));
     },
@@ -376,6 +383,40 @@ test('a blank right half from the console pairs with the named input before it',
     assert.equal(s.channels[2].link, 3);
     assert.equal(s.channels[3].name, 'Ch 4');
     assert.ok(!('blankName' in s.channels[3]), 'internal flag stays on the rig');
+  } finally {
+    await close();
+  }
+});
+
+
+test('a connection attempt that hangs is dropped and retried (Mixing Station still starting)', async () => {
+  const { createServer: createTcp } = await import('node:net');
+  let accepted = 0;
+  const sockets = new Set();
+  const hung = createTcp((sock) => { accepted++; sockets.add(sock); }); // accepts, never answers
+  await new Promise((r) => hung.listen(0, '127.0.0.1', r));
+  const driver = new MixingStationDriver({ wsUrl: `ws://127.0.0.1:${hung.address().port}/`, openTimeoutMs: 120, reconnectMs: [30] });
+  await driver.connect();
+  try {
+    await new Promise((r) => setTimeout(r, 700));
+    assert.ok(accepted >= 2, `retried after a hung attempt (attempts: ${accepted})`);
+  } finally {
+    await driver.close();
+    for (const s of sockets) s.destroy();
+    await new Promise((r) => hung.close(r));
+  }
+});
+
+test('a socket that goes silent is reopened and the console comes back by itself', async () => {
+  const { driver, ms, close } = await setup({ keepAliveMs: 50, silenceMs: 250, requestTimeoutMs: 150, reconnectMs: [30] });
+  try {
+    const down = new Promise((r) => driver.on('status', (s) => !s.connected && r()));
+    ms.silence(true);
+    await down;
+    const up = new Promise((r) => driver.on('status', (s) => s.connected && r()));
+    ms.silence(false);
+    await up;
+    assert.equal(driver.snapshot().buses.length > 0, true);
   } finally {
     await close();
   }
