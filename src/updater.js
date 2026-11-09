@@ -23,6 +23,8 @@ export const DEFAULT_UPDATE_CONFIG = {
   checkEveryMs: 12 * 60 * 60 * 1000,
   firstCheckAfterMs: 2 * 60 * 1000,
   idleMs: 10 * 60 * 1000,
+  // An update held back because phones were connected is tried again this soon.
+  retryWhileBusyMs: 15 * 60 * 1000,
   timeoutMs: 60 * 1000,
 };
 
@@ -57,8 +59,8 @@ export class Updater {
     if (!this.cfg.enabled) return;
     const schedule = (ms) => {
       this.timer = setTimeout(async () => {
-        await this.checkNow().catch(() => {});
-        schedule(this.cfg.checkEveryMs);
+        const result = await this.checkNow().catch(() => null);
+        schedule(result?.action === 'waiting' ? this.cfg.retryWhileBusyMs : this.cfg.checkEveryMs);
       }, ms);
       this.timer.unref?.();
     };

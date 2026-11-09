@@ -49,6 +49,9 @@ export const DEFAULT_MS_CONFIG = {
   // FX returns shown to phones after the inputs (so a "Verbs" group works). `type` forces
   // a Mixing Station channel type number when the name match is not enough.
   fxReturns: { enabled: true, type: null, namePattern: 'fx\\s*ret|fx\\s*return|^fx$' },
+  // dLive UFX returns (the external effects rack: most show reverbs come back here), shown
+  // after the FX returns. Mixing Station 3.2 calls the type "UFX Ret" (type 102).
+  ufxReturns: { enabled: true, type: null, namePattern: 'ufx\\s*ret|ufx\\s*return|^ufx\\s*r$' },
   // Linked stereo inputs shown as one strip on phones (see src/stereoPairs.js).
   // pairs/unpair are input numbers for this rig, e.g. { pairs: [[17, 18]], unpair: [[13, 14]] }.
   stereoPairs: DEFAULT_STEREO_PAIRS,
@@ -80,6 +83,7 @@ export class MixingStationDriver extends EventEmitter {
       meters: { ...DEFAULT_MS_CONFIG.meters, ...(config.meters ?? {}) },
       busFilter: { ...DEFAULT_MS_CONFIG.busFilter, ...(config.busFilter ?? {}) },
       fxReturns: { ...DEFAULT_MS_CONFIG.fxReturns, ...(config.fxReturns ?? {}) },
+      ufxReturns: { ...DEFAULT_MS_CONFIG.ufxReturns, ...(config.ufxReturns ?? {}) },
       stereoPairs: { ...DEFAULT_STEREO_PAIRS, ...(config.stereoPairs ?? {}) },
     };
     this.lastDataAt = 0;
@@ -337,21 +341,26 @@ export class MixingStationDriver extends EventEmitter {
       ch: i, ms: inputStart + i, kind: 'input', number: i + 1, name: `Ch ${i + 1}`, color: null, link: null,
     }));
 
-    const fx = this.cfg.fxReturns;
-    if (fx?.enabled) {
-      const pattern = new RegExp(fx.namePattern, 'i');
-      const fxIndex = types.findIndex((t) => (Number.isInteger(fx.type)
-        ? t.type === fx.type
-        : t.type !== 0 && (pattern.test(String(t.name ?? '')) || pattern.test(String(t.shortName ?? '')))));
-      const fxType = types[fxIndex];
-      if (fxType && fxType.count > 0) {
-        const start = offsetOf(fxType, fxIndex);
-        for (let i = 0; i < fxType.count; i++) {
-          channels.push({ ch: channels.length, ms: start + i, kind: 'fx_return', number: i + 1, name: `FX ${i + 1}`, color: null, link: null });
-        }
+    // Effect returns follow the inputs, each kind numbered from 1 ("FX 2", "UFX 5").
+    const isUfx = (t) => /ufx/i.test(String(t.name ?? '')) || /ufx/i.test(String(t.shortName ?? ''));
+    const addReturns = (cfg, kind, label, accept) => {
+      if (!cfg?.enabled) return null;
+      const pattern = new RegExp(cfg.namePattern, 'i');
+      const index = types.findIndex((t) => (Number.isInteger(cfg.type)
+        ? t.type === cfg.type
+        : t.type !== 0 && accept(t) && (pattern.test(String(t.name ?? '')) || pattern.test(String(t.shortName ?? '')))));
+      const type = types[index];
+      if (!type || !(type.count > 0)) return null;
+      const start = offsetOf(type, index);
+      for (let i = 0; i < type.count; i++) {
+        channels.push({ ch: channels.length, ms: start + i, kind, number: i + 1, name: `${label} ${i + 1}`, color: null, link: null });
       }
-      this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${fxType ? `type ${fxType.type} x${fxType.count}` : 'not found'}`), 'info');
-    }
+      return type;
+    };
+    const fxType = addReturns(this.cfg.fxReturns, 'fx_return', 'FX', (t) => !isUfx(t));
+    const ufxType = addReturns(this.cfg.ufxReturns, 'ufx_return', 'UFX', isUfx);
+    const found = (t) => (t ? `type ${t.type} x${t.count}` : 'not found');
+    this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${found(fxType)}; UFX returns ${found(ufxType)}`), 'info');
     this.channels = channels;
     this.byMs = new Map(channels.map((c) => [c.ms, c]));
     this.#relink();
@@ -431,7 +440,7 @@ export class MixingStationDriver extends EventEmitter {
     if (p[2] === 'cfg' && (p[3] === 'name' || p[3] === 'color')) {
       const c = this.byMs.get(ch);
       if (c) {
-        if (p[3] === 'name') c.name = v ? String(v) : (c.kind === 'input' ? `Ch ${c.number}` : `FX ${c.number}`);
+        if (p[3] === 'name') c.name = v ? String(v) : `${{ input: 'Ch', fx_return: 'FX', ufx_return: 'UFX' }[c.kind] ?? c.kind} ${c.number}`;
         else c.color = this.cfg.colorMap[Math.round(Number(v))] ?? null;
         // A rename can make or break an L/R pair.
         const touched = new Set([c, ...(p[3] === 'name' ? this.#relink() : [])]);

@@ -330,3 +330,38 @@ test('a rig can list its linked pairs by input number', async () => {
     await close();
   }
 });
+
+test('dLive UFX returns follow the FX returns as their own kind; UFX sends are not returns', async () => {
+  const info = { channelTypes: [
+    ...CHANNEL_TYPES,
+    { type: 102, name: 'UFX Ret', shortName: 'UFX R', count: 2, offset: 144 },
+    { type: 101, name: 'UFX Snd', shortName: 'UFX', count: 2, offset: 183 },
+    { type: 2, name: 'FX Send', shortName: 'FxSnd', count: 2, offset: 181 },
+  ] };
+  const { driver, ms, close } = await setup({}, { info });
+  try {
+    const s = driver.snapshot();
+    assert.deepEqual(s.channels.slice(4).map((c) => [c.ch, c.kind, c.number, c.name]), [
+      [4, 'fx_return', 1, 'Vox Verb'], [5, 'fx_return', 2, 'FX 2'],
+      [6, 'ufx_return', 1, 'UFX 1'], [7, 'ufx_return', 2, 'UFX 2'],
+    ]);
+    const layout = new Promise((r) => driver.once('layout', r));
+    ms.push('ch.144.cfg.name', 'V1 VrbRT');
+    assert.deepEqual((await layout).channels[0], { ch: 6, kind: 'ufx_return', number: 1, name: 'V1 VrbRT', color: null, link: null });
+    ms.push('ch.144.cfg.name', '');
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(driver.snapshot().channels[6].name, 'UFX 1');
+  } finally {
+    await close();
+  }
+});
+
+test('UFX returns can be turned off', async () => {
+  const info = { channelTypes: [...CHANNEL_TYPES, { type: 102, name: 'UFX Ret', shortName: 'UFX R', count: 2, offset: 144 }] };
+  const { driver, close } = await setup({ ufxReturns: { enabled: false } }, { info });
+  try {
+    assert.deepEqual(driver.snapshot().channels.map((c) => c.kind).filter((k) => k !== 'input'), ['fx_return', 'fx_return']);
+  } finally {
+    await close();
+  }
+});
