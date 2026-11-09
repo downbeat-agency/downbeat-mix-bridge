@@ -8,8 +8,11 @@
 //   4. sameName (on by default): neighbours with exactly the same name ("KeysTOP" on 17 and
 //      18). Downbeat show files name both halves of a stereo input the same. A rig with two
 //      players on the same name lists them in `unpair`.
+//   5. blankPartner (on by default): an odd input with a name followed by an even input with
+//      no name at all ("BGM" on 37, "" on 38). On the Green dLive that blank right half is how
+//      a stereo input shows up in Mixing Station; unused channels carry their number ("85").
 
-export const DEFAULT_STEREO_PAIRS = { auto: true, sameName: true, pairs: [], unpair: [] };
+export const DEFAULT_STEREO_PAIRS = { auto: true, sameName: true, blankPartner: true, pairs: [], unpair: [] };
 
 /** { base, side: 'L' | 'R' } when a name ends in a left/right marker, else null. */
 export function sideOf(name) {
@@ -57,6 +60,8 @@ export function findPairs(channels, config = DEFAULT_STEREO_PAIRS) {
   }
 
   const defaultName = (c) => !String(c.name ?? '').trim() || /^ch\s*\d+$/i.test(String(c.name).trim());
+  // The console sent an empty name (the bridge shows it as "Ch 38").
+  const blank = (c) => c.blankName === true;
   for (const a of inputs) {
     const b = byNumber.get(a.number + 1);
     if (!b || taken.has(a.number) || taken.has(b.number) || blocked.has(key(a.number, b.number))) continue;
@@ -69,6 +74,10 @@ export function findPairs(channels, config = DEFAULT_STEREO_PAIRS) {
       }
     }
     if (cfg.sameName && !defaultName(a) && String(a.name).trim().toLowerCase() === String(b.name).trim().toLowerCase()) {
+      link(a, b);
+      continue;
+    }
+    if (cfg.blankPartner && a.number % 2 === 1 && !blank(a) && !defaultName(a) && blank(b)) {
       link(a, b);
     }
   }
