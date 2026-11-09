@@ -69,6 +69,13 @@ export const DEFAULT_MS_CONFIG = {
   // How long to listen for an "Access Denied"-style error after a write before treating it as done.
   writeErrorWindowMs: 250,
   keepAliveMs: 5000,
+  // A connection attempt that neither opens nor fails in this time is dropped and retried.
+  // Seen on the Green rig (2026-11-09): after a restart the bridge reached Mixing Station
+  // while it was still starting, the attempt hung, and the bridge never retried.
+  openTimeoutMs: 8000,
+  // An open socket that has heard nothing from Mixing Station for this long (it answers the
+  // 5 s keep-alive) is treated as dead and reopened.
+  silenceMs: 20000,
   reconnectMs: [500, 1000, 2000, 5000],
 };
 
@@ -196,25 +203,62 @@ export class MixingStationDriver extends EventEmitter {
   // --- websocket -------------------------------------------------------------
 
   #open() {
-    const ws = new WebSocket(this.cfg.wsUrl);
+    let ws;
+    try {
+      ws = new WebSocket(this.cfg.wsUrl);
+    } catch (err) {
+      this.#warn(err);
+      return this.#retry();
+    }
     this.ws = ws;
+    let finished = false;
+    // Exactly one retry per socket, however it ends (close event, timeout or watchdog).
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(openTimer);
+      if (this.ws === ws) this.#onClose();
+    };
+    const drop = (why) => {
+      this.#warn(new Error(`Mixing Station connection ${why}; reconnecting`), 'info');
+      try { ws.close(); } catch { /* already closing */ }
+      setTimeout(finish, 2000); // a stuck socket may never send its close event
+    };
+    const openTimer = setTimeout(() => {
+      if (ws.readyState !== WebSocket.OPEN) drop('did not open');
+    }, this.cfg.openTimeoutMs);
     ws.addEventListener('open', () => {
+      clearTimeout(openTimer);
       this.attempt = 0;
+      this.lastHeardAt = Date.now();
       // Measured live (Green rig, 2026-11-07): Mixing Station closes a websocket after 30 s
       // with no traffic (close code 1001). Either direction counts: a 5 s /app/state request
       // or a 1 s meter subscription each kept test sockets open indefinitely. The bridge does
       // both (meters when enabled). Node timers are not throttled, unlike a hidden browser
       // tab, which is what caused the browser logger's once-a-minute reconnects.
       clearInterval(this.keepAlive);
-      this.keepAlive = setInterval(() => this.#send({ path: '/app/state', method: 'GET', body: null }), this.cfg.keepAliveMs);
+      this.keepAlive = setInterval(() => {
+        if (Date.now() - this.lastHeardAt > this.cfg.silenceMs) return drop('went silent');
+        this.#send({ path: '/app/state', method: 'GET', body: null });
+      }, this.cfg.keepAliveMs);
       this.#sync().catch((err) => {
         this.#warn(err);
         ws.close();
       });
     });
-    ws.addEventListener('message', (ev) => this.#onMessage(ev.data));
-    ws.addEventListener('close', () => this.#onClose());
+    ws.addEventListener('message', (ev) => {
+      this.lastHeardAt = Date.now();
+      this.#onMessage(ev.data);
+    });
+    ws.addEventListener('close', finish);
     ws.addEventListener('error', () => {});
+  }
+
+  #retry() {
+    if (this.stopped) return;
+    const d = this.cfg.reconnectMs;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => this.#open(), d[Math.min(this.attempt++, d.length - 1)]);
   }
 
   #onClose() {
@@ -224,14 +268,15 @@ export class MixingStationDriver extends EventEmitter {
     const was = this.connected;
     this.connected = false;
     if (was) this.emit('status', { connected: false });
-    if (this.stopped) return;
-    const d = this.cfg.reconnectMs;
-    this.reconnectTimer = setTimeout(() => this.#open(), d[Math.min(this.attempt++, d.length - 1)]);
+    this.syncing = false;
+    this.mixerOnline = false;
+    this.#retry();
   }
 
   async #sync() {
     if (this.syncing) return;
     this.syncing = true;
+    const ws = this.ws;
     try {
       const state = await this.#request('/app/state', 'GET', null);
       this.mixerOnline = state?.topState === 'connected';
@@ -293,11 +338,11 @@ export class MixingStationDriver extends EventEmitter {
       while (Date.now() - this.lastDataAt < this.cfg.quietMs && Date.now() - started < this.cfg.maxSyncMs) {
         await new Promise((r) => setTimeout(r, 100));
       }
-      if (this.ws?.readyState !== WebSocket.OPEN) return;
+      if (this.ws !== ws || ws?.readyState !== WebSocket.OPEN) return;
       this.connected = true;
       this.emit('status', { connected: true });
     } finally {
-      this.syncing = false;
+      if (this.ws === ws) this.syncing = false;
     }
   }
 
