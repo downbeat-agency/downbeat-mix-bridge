@@ -35,6 +35,7 @@
 //     reply, so writes are fire-and-forget with a short window for an error.
 import { EventEmitter } from 'node:events';
 import { paramKey } from '../model.js';
+import { DEFAULT_STEREO_PAIRS, findPairs } from '../stereoPairs.js';
 
 export const DEFAULT_MS_CONFIG = {
   wsUrl: 'ws://127.0.0.1:8091/',
@@ -48,6 +49,9 @@ export const DEFAULT_MS_CONFIG = {
   // FX returns shown to phones after the inputs (so a "Verbs" group works). `type` forces
   // a Mixing Station channel type number when the name match is not enough.
   fxReturns: { enabled: true, type: null, namePattern: 'fx\\s*ret|fx\\s*return|^fx$' },
+  // Linked stereo inputs shown as one strip on phones (see src/stereoPairs.js).
+  // pairs/unpair are input numbers for this rig, e.g. { pairs: [[17, 18]], unpair: [[13, 14]] }.
+  stereoPairs: DEFAULT_STEREO_PAIRS,
   // Mixing Station color enum -> our names. 0 (Black) is "no color" on dLive.
   colorMap: { 0: null, 1: 'red', 2: 'green', 3: 'yellow', 4: 'blue', 5: 'purple', 6: 'lightblue', 7: 'white' },
   meters: { enabled: true, intervalMs: 100 },
@@ -76,6 +80,7 @@ export class MixingStationDriver extends EventEmitter {
       meters: { ...DEFAULT_MS_CONFIG.meters, ...(config.meters ?? {}) },
       busFilter: { ...DEFAULT_MS_CONFIG.busFilter, ...(config.busFilter ?? {}) },
       fxReturns: { ...DEFAULT_MS_CONFIG.fxReturns, ...(config.fxReturns ?? {}) },
+      stereoPairs: { ...DEFAULT_STEREO_PAIRS, ...(config.stereoPairs ?? {}) },
     };
     this.lastDataAt = 0;
     this.connected = false;
@@ -83,7 +88,7 @@ export class MixingStationDriver extends EventEmitter {
     this.attempt = 0;
     // Phone-facing channels: `ch` is dense (inputs 0..n-1, then FX returns), `ms` is the
     // Mixing Station channel index used in paths and meters.
-    this.channels = []; // { ch, ms, kind, number, name, color }
+    this.channels = []; // { ch, ms, kind, number, name, color, link }
     this.byMs = new Map();
     this.buses = []; // { bus, name, stereo, send, channel }
     this.values = new Map();
@@ -329,7 +334,7 @@ export class MixingStationDriver extends EventEmitter {
     if (this.cfg.maxInputs) count = Math.min(count, this.cfg.maxInputs);
     const inputStart = inputs ? offsetOf(inputs, inputIndex) : 0;
     const channels = Array.from({ length: count }, (_, i) => ({
-      ch: i, ms: inputStart + i, kind: 'input', number: i + 1, name: `Ch ${i + 1}`, color: null,
+      ch: i, ms: inputStart + i, kind: 'input', number: i + 1, name: `Ch ${i + 1}`, color: null, link: null,
     }));
 
     const fx = this.cfg.fxReturns;
@@ -342,13 +347,28 @@ export class MixingStationDriver extends EventEmitter {
       if (fxType && fxType.count > 0) {
         const start = offsetOf(fxType, fxIndex);
         for (let i = 0; i < fxType.count; i++) {
-          channels.push({ ch: channels.length, ms: start + i, kind: 'fx_return', number: i + 1, name: `FX ${i + 1}`, color: null });
+          channels.push({ ch: channels.length, ms: start + i, kind: 'fx_return', number: i + 1, name: `FX ${i + 1}`, color: null, link: null });
         }
       }
       this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${fxType ? `type ${fxType.type} x${fxType.count}` : 'not found'}`), 'info');
     }
     this.channels = channels;
     this.byMs = new Map(channels.map((c) => [c.ms, c]));
+    this.#relink();
+  }
+
+  /** Recomputes linked pairs; returns the channels whose link changed. */
+  #relink() {
+    const links = findPairs(this.channels, this.cfg.stereoPairs);
+    const changed = [];
+    for (const c of this.channels) {
+      const next = links.get(c.ch) ?? null;
+      if (c.link !== next) {
+        c.link = next;
+        changed.push(c);
+      }
+    }
+    return changed;
   }
 
   #send(obj) {
@@ -413,8 +433,9 @@ export class MixingStationDriver extends EventEmitter {
       if (c) {
         if (p[3] === 'name') c.name = v ? String(v) : (c.kind === 'input' ? `Ch ${c.number}` : `FX ${c.number}`);
         else c.color = this.cfg.colorMap[Math.round(Number(v))] ?? null;
-        const { ms, ...pub } = c;
-        return this.#layout({ channels: [pub] });
+        // A rename can make or break an L/R pair.
+        const touched = new Set([c, ...(p[3] === 'name' ? this.#relink() : [])]);
+        return this.#layout({ channels: [...touched].map(({ ms, ...pub }) => pub) });
       }
       const bus = this.channelToBus?.get(ch);
       if (bus !== undefined && p[3] === 'name' && v) {

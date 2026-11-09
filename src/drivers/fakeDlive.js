@@ -3,6 +3,7 @@
 // meters move, and it can drop off the network and come back.
 import { EventEmitter } from 'node:events';
 import { paramKey } from '../model.js';
+import { findPairs } from '../stereoPairs.js';
 
 const DEFAULT_CHANNELS = [
   ['Kick', 'yellow'], ['Snare', 'yellow'], ['Hat', 'yellow'], ['Tom 1', 'yellow'], ['Tom 2', 'yellow'],
@@ -22,8 +23,9 @@ export class FakeDliveDriver extends EventEmitter {
     this.writes = 0;
     this.channels = Array.from({ length: channelCount }, (_, ch) => {
       const preset = DEFAULT_CHANNELS[ch];
-      return { ch, name: preset ? preset[0] : `Ch ${ch + 1}`, color: uncolored || !preset ? null : preset[1] };
+      return { ch, kind: 'input', number: ch + 1, name: preset ? preset[0] : `Ch ${ch + 1}`, color: uncolored || !preset ? null : preset[1], link: null };
     });
+    for (const [ch, partner] of findPairs(this.channels)) this.channels[ch].link = partner;
     this.buses = DEFAULT_BUSES.map((n, bus) => ({ bus, name: `Stereo Mix ${bus + 1} ${n}`, stereo: true }));
     this.values = new Map();
     for (const b of this.buses) {

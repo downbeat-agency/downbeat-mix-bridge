@@ -34,7 +34,7 @@ Indices are zero-based: `ch: 0` is channel 1, `bus: 0` is Stereo Mix 1. Levels a
 
 `console.model` (in `welcome`, `snapshot` and `console`) is the console model, `dlive` or `wing`, or `null`. The app uses it to pick the standard Mix groups from Setlists.
 
-`channels[i]` is `{ ch, kind, number, name, color }`. `ch` is the bridge index used in every other message (inputs first, then FX returns). `kind` is `input` or `fx_return` (later `aux` on a Wing); `number` is the one-based number people see on the console for that kind, so input 5 and FX return 5 are different channels. Groups are saved by `kind` and `number`, never by `ch`. Older bridges send no `kind`/`number`: treat that as `input` and `ch + 1`. `meters.ch` follows the same `ch` order.
+`channels[i]` is `{ ch, kind, number, name, color, link }`. `ch` is the bridge index used in every other message (inputs first, then FX returns). `kind` is `input` or `fx_return` (later `aux` on a Wing); `number` is the one-based number people see on the console for that kind, so input 5 and FX return 5 are different channels. Groups are saved by `kind` and `number`, never by `ch`. Older bridges send no `kind`/`number`: treat that as `input` and `ch + 1`. `link` is the `ch` of the other half of a linked stereo input pair ("Keys L"/"Keys R"), else `null`; both halves point at each other, and phones show the pair as one strip that moves both sends together. Older bridges send no `link`. A `layout` message carries `link` for every channel whose pairing changed (a rename can make or break a pair). `meters.ch` follows the same `ch` order.
 
 `channels[i].color` is one of `red, green, yellow, blue, purple, lightblue, white, orange, pink` or `null` (no color assigned yet: show neutral rows, never invent a color).
 
