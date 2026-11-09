@@ -47,3 +47,22 @@ test('FX returns are never paired', () => {
   ];
   assert.equal(findPairs(channels).size, 0);
 });
+
+test('a named odd input followed by a blank one is a stereo pair (dLive right half)', () => {
+  const channels = [
+    { ch: 0, kind: 'input', number: 37, name: 'BGM' },
+    { ch: 1, kind: 'input', number: 38, name: 'Ch 38', blankName: true },
+    { ch: 2, kind: 'input', number: 39, name: 'DJ' },
+    { ch: 3, kind: 'input', number: 40, name: 'DJ' },
+    { ch: 4, kind: 'input', number: 41, name: 'Ch 41', blankName: true },
+    { ch: 5, kind: 'input', number: 42, name: 'Ch 42', blankName: true },
+    { ch: 6, kind: 'input', number: 44, name: 'Sax' },
+    { ch: 7, kind: 'input', number: 45, name: 'Ch 45', blankName: true },
+    { ch: 8, kind: 'input', number: 85, name: '85' },
+    { ch: 9, kind: 'input', number: 86, name: 'Ch 86', blankName: true },
+  ];
+  const links = findPairs(channels);
+  assert.deepEqual([...links].filter(([a, b]) => a < b), [[0, 1], [2, 3], [8, 9]],
+    'two blanks are not a pair; an even named input never takes the next blank');
+  assert.equal(findPairs(channels, { blankPartner: false }).get(0), undefined);
+});

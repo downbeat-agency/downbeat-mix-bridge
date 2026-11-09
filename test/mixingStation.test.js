@@ -365,3 +365,18 @@ test('UFX returns can be turned off', async () => {
     await close();
   }
 });
+
+test('a blank right half from the console pairs with the named input before it', async () => {
+  const { driver, ms, close } = await setup();
+  try {
+    ms.push('ch.2.cfg.name', 'BGM');
+    ms.push('ch.3.cfg.name', '');
+    await new Promise((r) => setTimeout(r, 80));
+    const s = driver.snapshot();
+    assert.equal(s.channels[2].link, 3);
+    assert.equal(s.channels[3].name, 'Ch 4');
+    assert.ok(!('blankName' in s.channels[3]), 'internal flag stays on the rig');
+  } finally {
+    await close();
+  }
+});

@@ -131,7 +131,7 @@ export class MixingStationDriver extends EventEmitter {
       console: this.consoleName ?? 'Mixing Station',
       model: this.consoleModel ?? null,
       capabilities: this.capabilities,
-      channels: this.channels.map(({ ms, ...c }) => ({ ...c })),
+      channels: this.channels.map(({ ms, blankName, ...c }) => ({ ...c })),
       buses: this.buses.map(({ bus, name, stereo }) => ({ bus, name, stereo })),
       values: new Map(this.values),
     };
@@ -440,11 +440,15 @@ export class MixingStationDriver extends EventEmitter {
     if (p[2] === 'cfg' && (p[3] === 'name' || p[3] === 'color')) {
       const c = this.byMs.get(ch);
       if (c) {
-        if (p[3] === 'name') c.name = v ? String(v) : `${{ input: 'Ch', fx_return: 'FX', ufx_return: 'UFX' }[c.kind] ?? c.kind} ${c.number}`;
+        if (p[3] === 'name') {
+          c.name = v ? String(v) : `${{ input: 'Ch', fx_return: 'FX', ufx_return: 'UFX' }[c.kind] ?? c.kind} ${c.number}`;
+          // An empty name from the console (not just "no name yet") marks a stereo right half.
+          c.blankName = v === '' || (typeof v === 'string' && !v.trim());
+        }
         else c.color = this.cfg.colorMap[Math.round(Number(v))] ?? null;
         // A rename can make or break an L/R pair.
         const touched = new Set([c, ...(p[3] === 'name' ? this.#relink() : [])]);
-        return this.#layout({ channels: [...touched].map(({ ms, ...pub }) => pub) });
+        return this.#layout({ channels: [...touched].map(({ ms, blankName, ...pub }) => pub) });
       }
       const bus = this.channelToBus?.get(ch);
       if (bus !== undefined && p[3] === 'name' && v) {
