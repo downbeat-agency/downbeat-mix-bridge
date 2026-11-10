@@ -13,6 +13,7 @@
     "maxInputs": null,
     "ufxReturns": { "enabled": true },
     "auxInputs": { "enabled": true },
+    "busSends": { "enabled": true },
     "stereoPairs": { "auto": true, "sameName": true, "blankPartner": true, "pairs": [], "unpair": [] },
     "meters": { "enabled": true, "intervalMs": 100 }
   }

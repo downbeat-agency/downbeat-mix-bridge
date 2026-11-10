@@ -55,6 +55,12 @@ export const DEFAULT_MS_CONFIG = {
   // Wing aux inputs (Aux 1-8): stereo line inputs where reverb and playback returns usually
   // come in. Mixing Station 3.2 calls the type "Aux" (type 1). Phone kind "aux".
   auxInputs: { enabled: true, type: null, namePattern: '^aux$|aux\\s*in' },
+  // Wing buses as sources: a Wing bus can feed other buses, and Wing shows put reverbs and
+  // delays on buses (13 HALL V, 15 DELAY...). Phones get each bus as kind "bus" (Bus 1-16)
+  // and control its send into their mix, so a hall reverb can be turned down in one ear mix.
+  // Only a channel type named "Bus" that Mixing Station says can feed buses (the Wing);
+  // dLive Mix/St Mix types are never sources.
+  busSends: { enabled: true, namePattern: '^bus$' },
   // Linked stereo inputs shown as one strip on phones (see src/stereoPairs.js).
   // pairs/unpair are input numbers for this rig, e.g. { pairs: [[17, 18]], unpair: [[13, 14]] }.
   stereoPairs: DEFAULT_STEREO_PAIRS,
@@ -95,6 +101,7 @@ export class MixingStationDriver extends EventEmitter {
       fxReturns: { ...DEFAULT_MS_CONFIG.fxReturns, ...(config.fxReturns ?? {}) },
       ufxReturns: { ...DEFAULT_MS_CONFIG.ufxReturns, ...(config.ufxReturns ?? {}) },
       auxInputs: { ...DEFAULT_MS_CONFIG.auxInputs, ...(config.auxInputs ?? {}) },
+      busSends: { ...DEFAULT_MS_CONFIG.busSends, ...(config.busSends ?? {}) },
       stereoPairs: { ...DEFAULT_STEREO_PAIRS, ...(config.stereoPairs ?? {}) },
     };
     this.lastDataAt = 0;
@@ -143,7 +150,7 @@ export class MixingStationDriver extends EventEmitter {
       model: this.consoleModel ?? null,
       capabilities: this.capabilities,
       channels: this.channels.map(({ ms, blankName, ...c }) => ({ ...c })),
-      buses: this.buses.map(({ bus, name, stereo }) => ({ bus, name, stereo })),
+      buses: this.buses.map(({ bus, name, stereo, channel }) => ({ bus, name, stereo, ...this.#selfOf(channel) })),
       values: new Map(this.values),
     };
   }
@@ -158,6 +165,7 @@ export class MixingStationDriver extends EventEmitter {
     else {
       const c = this.channels[ch];
       if (!c) throw new Error(`no channel ${ch}`);
+      if (c.ms === b.channel) throw new Error('a mix cannot be sent into itself');
       path = this.#sendPath(b, c.ms, field);
     }
     if (!path) throw new Error(`${field} not supported here`);
@@ -192,6 +200,12 @@ export class MixingStationDriver extends EventEmitter {
   }
 
   // --- paths -----------------------------------------------------------------
+
+  /** `self`: the phone channel that is this mix's own bus (Wing bus sends), so phones hide it. */
+  #selfOf(channel) {
+    const c = this.byMs?.get(channel);
+    return c ? { self: c.ch } : {};
+  }
 
   #sendPath(b, ch, field) {
     const leaf = { level: 'lvl', mute: 'on', pan: 'pan' }[field];
@@ -409,8 +423,10 @@ export class MixingStationDriver extends EventEmitter {
     const fxType = addReturns(this.cfg.fxReturns, 'fx_return', 'FX', (t) => !isUfx(t));
     const ufxType = addReturns(this.cfg.ufxReturns, 'ufx_return', 'UFX', isUfx);
     const auxType = addReturns(this.cfg.auxInputs, 'aux', 'Aux', (t) => !/send|snd/i.test(`${t.name ?? ''} ${t.shortName ?? ''}`));
+    const feedsBuses = (t) => (t.signalTargets ?? []).some((s) => s?.channelType?.type === t.type);
+    const busType = addReturns(this.cfg.busSends, 'bus', 'Bus', (t) => t.type === MIX_TYPE && feedsBuses(t));
     const found = (t) => (t ? `type ${t.type} x${t.count}` : 'not found');
-    this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${found(fxType)}; UFX returns ${found(ufxType)}; aux inputs ${found(auxType)}`), 'info');
+    this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${found(fxType)}; UFX returns ${found(ufxType)}; aux inputs ${found(auxType)}; bus sends ${found(busType)}`), 'info');
     this.channels = channels;
     this.byMs = new Map(channels.map((c) => [c.ms, c]));
     this.#relink();
@@ -491,14 +507,16 @@ export class MixingStationDriver extends EventEmitter {
       const c = this.byMs.get(ch);
       if (c) {
         if (p[3] === 'name') {
-          c.name = v ? String(v) : `${{ input: 'Ch', fx_return: 'FX', ufx_return: 'UFX', aux: 'Aux' }[c.kind] ?? c.kind} ${c.number}`;
+          c.name = v ? String(v) : `${{ input: 'Ch', fx_return: 'FX', ufx_return: 'UFX', aux: 'Aux', bus: 'Bus' }[c.kind] ?? c.kind} ${c.number}`;
           // An empty name from the console (not just "no name yet") marks a stereo right half.
           c.blankName = v === '' || (typeof v === 'string' && !v.trim());
         }
         else c.color = this.cfg.colorMap[Math.round(Number(v))] ?? null;
         // A rename can make or break an L/R pair.
         const touched = new Set([c, ...(p[3] === 'name' ? this.#relink() : [])]);
-        return this.#layout({ channels: [...touched].map(({ ms, blankName, ...pub }) => pub) });
+        this.#layout({ channels: [...touched].map(({ ms, blankName, ...pub }) => pub) });
+        // A Wing bus is both a mix and a source channel: rename the mix too.
+        if (c.kind !== 'bus' || p[3] !== 'name') return;
       }
       const bus = this.channelToBus?.get(ch);
       if (bus !== undefined && p[3] === 'name' && v) {

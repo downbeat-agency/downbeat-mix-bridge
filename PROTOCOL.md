@@ -34,7 +34,7 @@ Indices are zero-based: `ch: 0` is channel 1, `bus: 0` is Stereo Mix 1. Levels a
 
 `console.model` (in `welcome`, `snapshot` and `console`) is the console model, `dlive` or `wing`, or `null`. The app uses it to pick the standard Mix groups from Setlists.
 
-`channels[i]` is `{ ch, kind, number, name, color, link }`. `ch` is the bridge index used in every other message (inputs first, then FX returns). `kind` is `input`, `fx_return` or `ufx_return` (dLive UFX returns, where most show reverbs come back) or `aux` (Wing aux inputs, Aux 1–8: usually reverb and playback returns); `number` is the one-based number people see on the console for that kind, so input 5 and FX return 5 are different channels. Groups are saved by `kind` and `number`, never by `ch`. Older bridges send no `kind`/`number`: treat that as `input` and `ch + 1`. `link` is the `ch` of the other half of a linked stereo input pair ("Keys L"/"Keys R"), else `null`; both halves point at each other, and phones show the pair as one strip that moves both sends together. Older bridges send no `link`. A `layout` message carries `link` for every channel whose pairing changed (a rename can make or break a pair). `meters.ch` follows the same `ch` order.
+`channels[i]` is `{ ch, kind, number, name, color, link }`. `ch` is the bridge index used in every other message (inputs first, then FX returns). `kind` is `input`, `fx_return` or `ufx_return` (dLive UFX returns, where most show reverbs come back) `aux` (Wing aux inputs, Aux 1–8: usually reverb and playback returns) or `bus` (a Wing bus feeding other buses, Bus 1–16, e.g. 13 HALL V: Wing shows put reverbs and delays on buses); `number` is the one-based number people see on the console for that kind, so input 5 and FX return 5 are different channels. Groups are saved by `kind` and `number`, never by `ch`. Older bridges send no `kind`/`number`: treat that as `input` and `ch + 1`. `link` is the `ch` of the other half of a linked stereo input pair ("Keys L"/"Keys R"), else `null`; both halves point at each other, and phones show the pair as one strip that moves both sends together. Older bridges send no `link`. A `layout` message carries `link` for every channel whose pairing changed (a rename can make or break a pair). `meters.ch` follows the same `ch` order.
 
 `channels[i].color` is one of `red, green, yellow, blue, purple, lightblue, white, orange, pink` or `null` (no color assigned yet: show neutral rows, never invent a color).
 
@@ -49,3 +49,7 @@ Indices are zero-based: `ch: 0` is channel 1, `bus: 0` is Stereo Mix 1. Levels a
 - Rapid fader moves are merged per parameter (latest value wins, at most ~25 updates/s per fader) and the console never receives more than `maxWritesPerSecond`.
 - If the console drops, queued writes are thrown away, never replayed after reconnect.
 - Every write that reaches the console is logged to `logs/mix-changes.jsonl` with who made it.
+
+### Buses as sources (Wing)
+
+On a Wing every bus can also feed other buses, so each bus is listed twice: as a mix in `buses` and as a source channel of kind `bus` in `channels`. A bus entry carries `self`: the `ch` of its own source channel. Phones hide that channel while that mix is selected; the bridge refuses a send from a mix into itself. dLive rigs have no `bus` channels and no `self`.
