@@ -69,9 +69,12 @@ function fakeMixingStation({ users = { admin: '' }, info = {}, targets = TARGETS
       }
       if (msg.path === '/console/information') return reply(msg, { channelTypes: CHANNEL_TYPES, ...info });
       if (msg.path === '/console/mixTargets') return reply(msg, { targets });
-      if (msg.path.startsWith('/console/data/definitions/')) return reply(msg, { definitions: { x: { definition: { min: -37, max: 37 } } } });
+      if (msg.path.startsWith('/console/data/definitions/')) {
+        const def = /headamp\.gain$/.test(msg.path) ? { min: -2.5, max: 45 } : /preamp\.trim$/.test(msg.path) ? { min: -18, max: 18 } : { min: -37, max: 37 };
+        return reply(msg, { definitions: { x: { definition: def } } });
+      }
       if (msg.path === '/console/data/subscribe') {
-        const re = new RegExp('^' + msg.body.path.replace(/\./g, '\\.').replace(/\*/g, '[^.]+') + '$');
+        const re = new RegExp('^' + msg.body.path.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^.]+') + '$');
         for (const p of data.keys()) if (re.test(p)) push(conn, p);
         return;
       }
@@ -235,9 +238,9 @@ test('FX returns follow the inputs with their own numbers and Mixing Station pat
   try {
     const s = driver.snapshot();
     assert.equal(s.model, 'dlive');
-    assert.deepEqual(s.channels[0], { ch: 0, kind: 'input', number: 1, name: 'Kick', color: 'yellow', link: null });
-    assert.deepEqual(s.channels[4], { ch: 4, kind: 'fx_return', number: 1, name: 'Vox Verb', color: 'purple', link: null });
-    assert.deepEqual(s.channels[5], { ch: 5, kind: 'fx_return', number: 2, name: 'FX 2', color: null, link: null });
+    assert.deepEqual(s.channels[0], { ch: 0, kind: 'input', number: 1, name: 'Kick', color: 'yellow', link: null, preamp: { source: 'trim', min: -18, max: 18, step: 0.5, phantom: false } });
+    assert.deepEqual(s.channels[4], { ch: 4, kind: 'fx_return', number: 1, name: 'Vox Verb', color: 'purple', link: null, preamp: null });
+    assert.deepEqual(s.channels[5], { ch: 5, kind: 'fx_return', number: 2, name: 'FX 2', color: null, link: null, preamp: null });
     assert.equal(s.values.get(paramKey(0, 4, 'level')), -10, 'ch.200 send into MC');
     await driver.set(0, 4, 'level', -6);
     assert.equal(ms.data.get('ch.200.mix.sends.4.lvl'), -6, 'phone ch 4 writes Mixing Station ch 200');
@@ -247,7 +250,7 @@ test('FX returns follow the inputs with their own numbers and Mixing Station pat
     assert.deepEqual(await change, { bus: 1, ch: 5, field: 'level', value: -2 });
     const layout = new Promise((r) => driver.once('layout', r));
     ms.push('ch.201.cfg.name', 'Plate');
-    assert.deepEqual((await layout).channels[0], { ch: 5, kind: 'fx_return', number: 2, name: 'Plate', color: null, link: null });
+    assert.deepEqual((await layout).channels[0], { ch: 5, kind: 'fx_return', number: 2, name: 'Plate', color: null, link: null, preamp: null });
     await assert.rejects(driver.set(0, 9, 'level', 0), /no channel/);
   } finally {
     await close();
@@ -355,7 +358,7 @@ test('dLive UFX returns follow the FX returns as their own kind; UFX sends are n
     ]);
     const layout = new Promise((r) => driver.once('layout', r));
     ms.push('ch.144.cfg.name', 'V1 VrbRT');
-    assert.deepEqual((await layout).channels[0], { ch: 6, kind: 'ufx_return', number: 1, name: 'V1 VrbRT', color: null, link: null });
+    assert.deepEqual((await layout).channels[0], { ch: 6, kind: 'ufx_return', number: 1, name: 'V1 VrbRT', color: null, link: null, preamp: null });
     ms.push('ch.144.cfg.name', '');
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(driver.snapshot().channels[6].name, 'UFX 1');
@@ -378,7 +381,7 @@ test('Wing aux inputs follow the inputs as their own kind', async () => {
     ]);
     const layout = new Promise((r) => driver.once('layout', r));
     ms.push('ch.40.cfg.name', 'VOX VERB');
-    assert.deepEqual((await layout).channels[0], { ch: 4, kind: 'aux', number: 1, name: 'VOX VERB', color: null, link: null });
+    assert.deepEqual((await layout).channels[0], { ch: 4, kind: 'aux', number: 1, name: 'VOX VERB', color: null, link: null, preamp: null });
   } finally {
     await close();
   }
@@ -479,6 +482,44 @@ test('a socket that goes silent is reopened and the console comes back by itself
     ms.silence(false);
     await up;
     assert.equal(driver.snapshot().buses.length > 0, true);
+  } finally {
+    await close();
+  }
+});
+
+test('Wing preamps: headamp gain and 48V where the source has a headamp, else trim', async () => {
+  // ch 0: local input (headamp + 48V). ch 1: card input (trim only, like the Pink vocals).
+  const extraData = [['ch.0.headamp.gain', 7.5], ['ch.0.headamp.+48v', true], ['ch.1.preamp.trim', -2]];
+  const { driver, ms, close } = await setup({}, { extraData });
+  try {
+    const s = driver.snapshot();
+    assert.deepEqual(s.channels[0].preamp, { source: 'headamp', min: -2.5, max: 45, step: 0.5, phantom: true });
+    assert.deepEqual(s.channels[1].preamp, { source: 'trim', min: -18, max: 18, step: 0.5, phantom: false });
+    assert.equal(s.channels[4].preamp, null, 'FX returns get no gain');
+    assert.equal(s.values.get(paramKey(null, 0, 'gain')), 7.5);
+    assert.equal(s.values.get(paramKey(null, 0, 'phantom')), true);
+    assert.equal(s.values.get(paramKey(null, 1, 'gain')), -2);
+    assert.deepEqual([s.capabilities.gain, s.capabilities.phantom], [true, true]);
+
+    await driver.set(0, 0, 'gain', 50);
+    assert.equal(ms.data.get('ch.0.headamp.gain'), 45, 'headamp write, clamped');
+    await driver.set(3, 1, 'gain', 3.5);
+    assert.equal(ms.data.get('ch.1.preamp.trim'), 3.5, 'card channel writes its trim');
+    await driver.set(0, 0, 'phantom', false);
+    assert.equal(ms.data.get('ch.0.headamp.+48v'), false);
+    await assert.rejects(driver.set(0, 1, 'phantom', true), /no phantom/);
+    await assert.rejects(driver.set(0, 4, 'gain', 0), /no gain/);
+
+    const changes = [];
+    driver.on('change', (c) => changes.push(c));
+    ms.push('ch.0.headamp.gain', 12);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(changes.at(-1), { bus: null, ch: 0, field: 'gain', value: 12 });
+
+    // Source patched away from the headamp: the channel falls back to its trim.
+    const layout = new Promise((r) => driver.once('layout', r));
+    ms.push('ch.0.headamp.gain', null);
+    assert.equal((await layout).channels[0].preamp.source, 'trim');
   } finally {
     await close();
   }

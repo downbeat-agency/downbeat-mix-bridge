@@ -1,8 +1,9 @@
 // The bridge: one console connection in, many phones out.
 //
 // Rules this file enforces (see mix-bridge/PROTOCOL.md):
-// - Phones only touch monitor buses: per-input sends (level, mute, pan) and the bus master.
-//   Nothing else on the console is reachable through this protocol.
+// - Phones touch monitor buses: per-input sends (level, mute, pan) and the bus master.
+//   The one exception is a channel's gain and phantom power, which the app keeps locked until
+//   someone unlocks that one channel. Nothing else on the console is reachable.
 // - Any phone may switch to any allowed bus (takeover is allowed by product decision).
 // - Read before write: a phone must have received a snapshot of its bus, taken while the
 //   console was connected, before its writes are accepted.
@@ -10,13 +11,14 @@
 //   never sees more than `maxWritesPerSecond`.
 // - When the console drops, queued writes are discarded, never replayed later.
 import { randomUUID } from 'node:crypto';
-import { normalizeValue, paramKey } from './model.js';
+import { CHANNEL_FIELDS, normalizeValue, paramKey } from './model.js';
 
 export const PROTOCOL_VERSION = 1;
 
 const CAPABILITY_FOR = {
   send: { level: 'sendLevel', mute: 'sendMute', pan: 'sendPan' },
   master: { level: 'busMaster', mute: 'busMaster' },
+  channel: { gain: 'gain', phantom: 'phantom' },
 };
 
 export class Bridge {
@@ -179,6 +181,7 @@ export class Bridge {
       this.#error(session, code, message, msg.seq);
     };
     if (!this.connected) return reject('console_offline', 'Console is not connected');
+    if (CHANNEL_FIELDS.has(msg.field)) return this.#setChannel(session, msg, reject);
     const { bus, field } = msg;
     const ch = msg.ch ?? null;
     if (bus !== session.bus || !session.ready) return reject('not_ready', 'Select this bus and wait for its snapshot first');
@@ -200,6 +203,29 @@ export class Bridge {
     this.state.values.set(key, norm.value);
     // Other phones on this mix see the move right away.
     this.#broadcastBus(bus, { type: 'changed', bus, ch, field, value: norm.value, origin: session.id }, session.id);
+  }
+
+  // Gain and phantom belong to the channel, not to one mix: every phone hears the change, so
+  // every phone is told. The phone still needs a ready snapshot (it has seen the current value).
+  #setChannel(session, msg, reject) {
+    const { field } = msg;
+    const ch = msg.ch;
+    if (!session.ready) return reject('not_ready', 'Select a mix and wait for its snapshot first');
+    if (!this.state.capabilities[CAPABILITY_FOR.channel[field]]) return reject('unsupported', `${field} is not supported on this console`);
+    if (!(Number.isInteger(ch) && ch >= 0 && ch < this.state.channels.length)) return reject('bad_channel', `No channel ${ch}`);
+    const preamp = this.state.channels[ch]?.preamp;
+    if (!preamp) return reject('unsupported', 'This channel has no gain control');
+    if (field === 'phantom' && !preamp.phantom) return reject('unsupported', 'This channel has no phantom power');
+    const norm = normalizeValue(field, msg.value);
+    if (!norm.ok) return reject('bad_value', norm.reason);
+    let value = norm.value;
+    if (field === 'gain') value = Math.max(preamp.min, Math.min(preamp.max, value));
+
+    const key = paramKey(null, ch, field);
+    if (this.pending.has(key)) this.stats.writesMerged++;
+    this.pending.set(key, { bus: null, ch, field, value, sessionId: session.id });
+    this.state.values.set(key, value);
+    this.#broadcastAll({ type: 'changed', bus: null, ch, field, value, origin: session.id }, session.id);
   }
 
   // --- console side -------------------------------------------------------
@@ -233,7 +259,9 @@ export class Bridge {
     if (this.pending.has(key) || this.inFlight.has(key)) return;
     if (this.state.values.get(key) === value) return;
     this.state.values.set(key, value);
-    this.#broadcastBus(bus, { type: 'changed', bus, ch, field, value, origin: 'console' });
+    const msg = { type: 'changed', bus, ch, field, value, origin: 'console' };
+    if (bus === null || bus === undefined) this.#broadcastAll({ ...msg, bus: null });
+    else this.#broadcastBus(bus, msg);
   }
 
   #onLayout({ channels = [], buses = [] }) {
@@ -322,6 +350,12 @@ export class Bridge {
         mute: v.get(paramKey(bus, c.ch, 'mute')) ?? false,
         pan: this.state.capabilities.sendPan ? (v.get(paramKey(bus, c.ch, 'pan')) ?? 0) : null,
       })),
+      // Channel-wide values for channels with a preamp (see channels[i].preamp).
+      preamps: this.state.channels.filter((c) => c.preamp).map((c) => ({
+        ch: c.ch,
+        gain: v.get(paramKey(null, c.ch, 'gain')) ?? null,
+        phantom: c.preamp.phantom ? (v.get(paramKey(null, c.ch, 'phantom')) ?? false) : null,
+      })),
     });
     session.ready = true;
   }
@@ -330,6 +364,13 @@ export class Bridge {
     const text = JSON.stringify(msg);
     for (const s of this.sessions.values()) {
       if (s.id !== exceptSessionId && s.ready && s.bus === bus) s.conn.send(text);
+    }
+  }
+
+  #broadcastAll(msg, exceptSessionId = null) {
+    const text = JSON.stringify(msg);
+    for (const s of this.sessions.values()) {
+      if (s.id !== exceptSessionId && s.ready) s.conn.send(text);
     }
   }
 

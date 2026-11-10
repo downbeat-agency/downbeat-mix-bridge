@@ -23,7 +23,9 @@ export class FakeDliveDriver extends EventEmitter {
     this.writes = 0;
     this.channels = Array.from({ length: channelCount }, (_, ch) => {
       const preset = DEFAULT_CHANNELS[ch];
-      return { ch, kind: 'input', number: ch + 1, name: preset ? preset[0] : `Ch ${ch + 1}`, color: uncolored || !preset ? null : preset[1], link: null };
+      // dLive preamps run +5..+60 dB. Inputs past the preset list are "card" inputs: trim only.
+      const preamp = preset ? { source: 'headamp', min: 5, max: 60, step: 0.5, phantom: true } : { source: 'trim', min: -24, max: 24, step: 0.5, phantom: false };
+      return { ch, kind: 'input', number: ch + 1, name: preset ? preset[0] : `Ch ${ch + 1}`, color: uncolored || !preset ? null : preset[1], link: null, preamp };
     });
     for (const [ch, partner] of findPairs(this.channels)) this.channels[ch].link = partner;
     this.buses = DEFAULT_BUSES.map((n, bus) => ({ bus, name: `Stereo Mix ${bus + 1} ${n}`, stereo: true }));
@@ -37,11 +39,15 @@ export class FakeDliveDriver extends EventEmitter {
         this.values.set(paramKey(b.bus, c.ch, 'pan'), 0);
       }
     }
+    for (const c of this.channels) {
+      this.values.set(paramKey(null, c.ch, 'gain'), c.preamp.source === 'headamp' ? 30 : 0);
+      if (c.preamp.phantom) this.values.set(paramKey(null, c.ch, 'phantom'), /^OH /.test(c.name));
+    }
     this.meterPhase = 0;
   }
 
   get capabilities() {
-    return { sendLevel: true, sendMute: true, sendPan: true, busMaster: true, meters: true, names: true, colors: true };
+    return { sendLevel: true, sendMute: true, sendPan: true, busMaster: true, meters: true, names: true, colors: true, gain: true, phantom: true };
   }
 
   async connect() {

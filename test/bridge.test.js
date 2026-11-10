@@ -72,7 +72,7 @@ test('only monitor mix parameters can be changed', async () => {
   try {
     const c = await rig.client({ personId: 'p', bus: 1 });
     const cases = [
-      [{ bus: 1, ch: 0, field: 'gain', value: 10 }, 'bad_field'],
+      [{ bus: 1, ch: 0, field: 'trim', value: 10 }, 'bad_field'],
       [{ bus: 1, ch: 0, field: 'eq', value: 1 }, 'bad_field'],
       [{ bus: 1, ch: 999, field: 'level', value: 0 }, 'bad_channel'],
       [{ bus: 1, ch: 0, field: 'level', value: 'loud' }, 'bad_value'],
@@ -199,6 +199,63 @@ test('welcome lists the mixes so a phone can open on its own mix by name', async
     assert.equal(rig.bridge.isIdle(0), false, 'a phone is connected');
     assert.deepEqual(w.buses.map((b) => b.bus), [0, 1, 2]);
     assert.equal(w.buses[0].name, 'Stereo Mix 1 MC');
+  } finally {
+    await rig.close();
+  }
+});
+
+test('gain is channel-wide: every phone on every mix hears about it, clamped to the preamp', async () => {
+  const audit = [];
+  const rig = await startBridge({ bridgeOptions: { onAudit: (e) => audit.push(e) } });
+  try {
+    const gtr = await rig.client({ personId: 'p-gtr', name: 'Gtr', bus: 7 });
+    const sax = await rig.client({ personId: 'p-sax', name: 'Sax', bus: 4 });
+    assert.deepEqual(gtr.snapshot.channels[8].preamp, { source: 'headamp', min: 5, max: 60, step: 0.5, phantom: true });
+    assert.deepEqual(gtr.snapshot.preamps[8], { ch: 8, gain: 30, phantom: false });
+    assert.equal(gtr.snapshot.capabilities.gain, true);
+
+    gtr.send({ type: 'set', bus: 7, ch: 8, field: 'gain', value: 34.5 });
+    const seen = await sax.next('changed');
+    assert.deepEqual([seen.bus, seen.ch, seen.field, seen.value], [null, 8, 'gain', 34.5], 'a phone on another mix sees it');
+    await sleep(80);
+    assert.equal(rig.driver.values.get(paramKey(null, 8, 'gain')), 34.5);
+    assert.deepEqual(audit.at(-1), { ...audit.at(-1), name: 'Gtr', bus: null, ch: 8, field: 'gain', value: 34.5 });
+
+    gtr.send({ type: 'set', bus: 7, ch: 8, field: 'gain', value: 99 });
+    assert.equal((await sax.next('changed')).value, 60, 'clamped to the preamp top');
+
+    await sleep(80); // let the phone's write land before the desk moves it
+    rig.driver.deskChange(null, 8, 'gain', 28);
+    assert.equal((await gtr.next('changed')).value, 28, 'the A1 moving gain shows on phones');
+  } finally {
+    await rig.close();
+  }
+});
+
+test('phantom power: only where the channel has it, and only once the phone has a snapshot', async () => {
+  const rig = await startBridge();
+  try {
+    const c = await rig.client({ personId: 'p', bus: 0 });
+    const other = await rig.client({ personId: 'q', bus: 2 });
+    assert.equal(c.snapshot.channels[40].preamp.phantom, false, 'card input: trim only');
+    assert.equal(c.snapshot.preamps[40].phantom, null);
+
+    c.send({ type: 'set', ch: 40, field: 'phantom', value: true });
+    assert.equal((await c.next('error')).code, 'unsupported');
+    c.send({ type: 'set', ch: 0, field: 'phantom', value: 'on' });
+    assert.equal((await c.next('error')).code, 'bad_value');
+    c.send({ type: 'set', ch: 999, field: 'gain', value: 10 });
+    assert.equal((await c.next('error')).code, 'bad_channel');
+
+    c.send({ type: 'set', ch: 0, field: 'phantom', value: true });
+    const seen = await other.next('changed');
+    assert.deepEqual([seen.ch, seen.field, seen.value], [0, 'phantom', true]);
+    await sleep(60);
+    assert.equal(rig.driver.values.get(paramKey(null, 0, 'phantom')), true);
+
+    const late = await rig.client({ personId: 'r' }); // signed in, no mix picked yet
+    late.send({ type: 'set', ch: 0, field: 'gain', value: 40 });
+    assert.equal((await late.next('error')).code, 'not_ready');
   } finally {
     await rig.close();
   }

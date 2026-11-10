@@ -18,6 +18,10 @@
 //   - names ch.{ch}.cfg.name, colors ch.{ch}.cfg.color (enum 0 Black .. 7 White).
 //   - subscribe pushes updates as { path: "/console/data/get/<dataPath>", body: { value, format } };
 //     value null means the parameter no longer exists.
+//   - preamps (Wing, Pink rig, 2026-11-10, read-only probe): ch.{ch}.headamp.gain (dB, -2.5..45)
+//     and ch.{ch}.headamp.+48v (true/false) exist only on channels whose source has a headamp
+//     (local and stage-box inputs); ch.{ch}.preamp.trim (dB, -18..18) exists on every input.
+//     Card-fed channels (e.g. vocals on card C) have no headamp, so phones get their trim.
 //   - metering2 replies at /console/metering2/{id} with body.v: one entry per requested
 //     channel, a number for mono or [L, R] for stereo.
 //
@@ -61,6 +65,9 @@ export const DEFAULT_MS_CONFIG = {
   // Only a channel type named "Bus" that Mixing Station says can feed buses (the Wing);
   // dLive Mix/St Mix types are never sources.
   busSends: { enabled: true, namePattern: '^bus$' },
+  // Gain and phantom for phones (unlocked one channel at a time in the app). Headamp gain where
+  // the channel's source has one, else the channel trim. Only these channel kinds get it.
+  preamps: { enabled: true, kinds: ['input', 'aux'] },
   // Linked stereo inputs shown as one strip on phones (see src/stereoPairs.js).
   // pairs/unpair are input numbers for this rig, e.g. { pairs: [[17, 18]], unpair: [[13, 14]] }.
   stereoPairs: DEFAULT_STEREO_PAIRS,
@@ -102,6 +109,7 @@ export class MixingStationDriver extends EventEmitter {
       ufxReturns: { ...DEFAULT_MS_CONFIG.ufxReturns, ...(config.ufxReturns ?? {}) },
       auxInputs: { ...DEFAULT_MS_CONFIG.auxInputs, ...(config.auxInputs ?? {}) },
       busSends: { ...DEFAULT_MS_CONFIG.busSends, ...(config.busSends ?? {}) },
+      preamps: { ...DEFAULT_MS_CONFIG.preamps, ...(config.preamps ?? {}) },
       stereoPairs: { ...DEFAULT_STEREO_PAIRS, ...(config.stereoPairs ?? {}) },
     };
     this.lastDataAt = 0;
@@ -115,6 +123,9 @@ export class MixingStationDriver extends EventEmitter {
     this.buses = []; // { bus, name, stereo, send, channel }
     this.values = new Map();
     this.panRange = [-37, 37];
+    // Raw preamp values by Mixing Station index: { gain, phantom, trim } (undefined = not there).
+    this.preampRaw = new Map();
+    this.gainRanges = { headamp: { min: -2.5, max: 45, step: 0.5 }, trim: { min: -18, max: 18, step: 0.5 } };
     this.canWrite = false;
     this.waiters = new Map();
   }
@@ -129,6 +140,8 @@ export class MixingStationDriver extends EventEmitter {
       meters: !!this.cfg.meters.enabled,
       names: true,
       colors: true,
+      gain: this.channels.some((c) => c.preamp),
+      phantom: this.channels.some((c) => c.preamp?.phantom),
     };
   }
 
@@ -158,6 +171,8 @@ export class MixingStationDriver extends EventEmitter {
   async set(bus, ch, field, value) {
     if (!this.connected) throw new Error('console offline');
     if (!this.canWrite) throw new Error('Mixing Station write access is not set up (auth)');
+    // Gain and phantom are channel-wide: no mix involved (the bridge passes bus null).
+    if (field === 'gain' || field === 'phantom') return this.#setPreamp(ch, field, value);
     const b = this.buses[bus];
     if (!b) throw new Error(`no bus ${bus}`);
     let path;
@@ -170,6 +185,20 @@ export class MixingStationDriver extends EventEmitter {
     }
     if (!path) throw new Error(`${field} not supported here`);
     await this.#write(`/console/data/set/${path}/val`, { value: this.#toMs(field, value) });
+  }
+
+  async #setPreamp(ch, field, value) {
+    const c = this.channels[ch];
+    if (!c) throw new Error(`no channel ${ch}`);
+    const p = c.preamp;
+    if (!p) throw new Error(`channel ${c.name} has no gain control`);
+    if (field === 'phantom') {
+      if (!p.phantom) throw new Error(`channel ${c.name} has no phantom power`);
+      return this.#write(`/console/data/set/ch.${c.ms}.headamp.+48v/val`, { value: !!value });
+    }
+    const v = Math.max(p.min, Math.min(p.max, Number(value)));
+    const leaf = p.source === 'headamp' ? 'headamp.gain' : 'preamp.trim';
+    return this.#write(`/console/data/set/ch.${c.ms}.${leaf}/val`, { value: v });
   }
 
   // Confirmed on the live Green rig (2026-11-07): a successful set gets NO reply; only a
@@ -340,8 +369,10 @@ export class MixingStationDriver extends EventEmitter {
       } catch {
         /* keep default */
       }
+      if (this.cfg.preamps.enabled) await this.#loadGainRanges();
 
-      for (const p of ['ch.*.cfg.name', 'ch.*.cfg.color', 'ch.*.mix.sends.*.lvl', 'ch.*.mix.sends.*.on', 'ch.*.mix.sends.*.pan', 'ch.*.mix.lvl', 'ch.*.mix.on']) {
+      const preampPaths = this.cfg.preamps.enabled ? ['ch.*.headamp.gain', 'ch.*.headamp.+48v', 'ch.*.preamp.trim'] : [];
+      for (const p of [...preampPaths, 'ch.*.cfg.name', 'ch.*.cfg.color', 'ch.*.mix.sends.*.lvl', 'ch.*.mix.sends.*.on', 'ch.*.mix.sends.*.pan', 'ch.*.mix.lvl', 'ch.*.mix.on']) {
         this.#send({ path: '/console/data/subscribe', method: 'POST', body: { path: p, format: 'val' } });
       }
       if (this.cfg.meters.enabled) {
@@ -361,6 +392,22 @@ export class MixingStationDriver extends EventEmitter {
       this.emit('status', { connected: true });
     } finally {
       if (this.ws === ws) this.syncing = false;
+    }
+  }
+
+  async #loadGainRanges() {
+    const first = this.channels.find((c) => c.kind === 'input');
+    if (!first) return;
+    for (const [source, leaf] of [['headamp', 'headamp.gain'], ['trim', 'preamp.trim']]) {
+      try {
+        const defs = await this.#request(`/console/data/definitions/ch.${first.ms}.${leaf}`, 'GET', null);
+        const d = Object.values(defs?.definitions ?? {})[0]?.definition;
+        if (Number.isFinite(d?.min) && Number.isFinite(d?.max) && d.max > d.min) {
+          this.gainRanges[source] = { ...this.gainRanges[source], min: d.min, max: d.max };
+        }
+      } catch {
+        /* keep default */
+      }
     }
   }
 
@@ -427,6 +474,7 @@ export class MixingStationDriver extends EventEmitter {
     const busType = addReturns(this.cfg.busSends, 'bus', 'Bus', (t) => t.type === MIX_TYPE && feedsBuses(t));
     const found = (t) => (t ? `type ${t.type} x${t.count}` : 'not found');
     this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${found(fxType)}; UFX returns ${found(ufxType)}; aux inputs ${found(auxType)}; bus sends ${found(busType)}`), 'info');
+    for (const c of channels) c.preamp = this.#preampOf(c);
     this.channels = channels;
     this.byMs = new Map(channels.map((c) => [c.ms, c]));
     this.#relink();
@@ -525,6 +573,9 @@ export class MixingStationDriver extends EventEmitter {
       }
       return;
     }
+    if ((p[2] === 'headamp' && (p[3] === 'gain' || p[3] === '+48v') && p.length === 4) || (p[2] === 'preamp' && p[3] === 'trim' && p.length === 4)) {
+      return this.#onPreamp(ch, p[3] === 'trim' ? 'trim' : p[3] === 'gain' ? 'gain' : 'phantom', v);
+    }
     if (p[2] !== 'mix') return;
     if (p[3] === 'sends' && p.length === 6) {
       const bus = this.sendToBus?.get(Number(p[4]));
@@ -539,6 +590,36 @@ export class MixingStationDriver extends EventEmitter {
       const field = { lvl: 'level', on: 'mute' }[p[3]];
       if (bus !== undefined && field) this.#setValue(bus, null, field, this.#fromMs(field, v));
     }
+  }
+
+  // --- preamps ------------------------------------------------------------------
+
+  /** Phone-facing preamp description for a channel, or null when phones get no gain for it. */
+  #preampOf(c) {
+    if (!this.cfg.preamps.enabled || !this.cfg.preamps.kinds.includes(c.kind)) return null;
+    const raw = this.preampRaw.get(c.ms);
+    const num = (x) => x !== undefined && x !== null && Number.isFinite(Number(x));
+    if (num(raw?.gain)) return { source: 'headamp', ...this.gainRanges.headamp, phantom: raw.phantom !== undefined && raw.phantom !== null };
+    if (num(raw?.trim)) return { source: 'trim', ...this.gainRanges.trim, phantom: false };
+    return null;
+  }
+
+  #onPreamp(ms, key, v) {
+    const raw = this.preampRaw.get(ms) ?? {};
+    raw[key] = v === null ? undefined : v;
+    this.preampRaw.set(ms, raw);
+    const c = this.byMs.get(ms);
+    if (!c) return;
+    const next = this.#preampOf(c);
+    if (JSON.stringify(next) !== JSON.stringify(c.preamp)) {
+      c.preamp = next;
+      const { ms: _ms, blankName, ...pub } = c;
+      this.#layout({ channels: [pub] });
+    }
+    if (!next) return;
+    const gain = next.source === 'headamp' ? raw.gain : raw.trim;
+    this.#setValue(null, c.ch, 'gain', Math.round(Number(gain) * 10) / 10);
+    if (next.phantom) this.#setValue(null, c.ch, 'phantom', !!raw.phantom);
   }
 
   #setValue(bus, ch, field, value) {
