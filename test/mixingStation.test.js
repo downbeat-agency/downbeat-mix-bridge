@@ -25,7 +25,7 @@ const CHANNEL_TYPES = [
   { type: 7, name: 'FX Return', shortName: 'FX Ret', count: 2, offset: 200 },
 ];
 
-function fakeMixingStation({ users = { admin: '' }, info = {} } = {}) {
+function fakeMixingStation({ users = { admin: '' }, info = {}, targets = TARGETS, extraData = [] } = {}) {
   const data = new Map([
     ['ch.200.cfg.name', 'Vox Verb'],
     ['ch.200.cfg.color', 5],
@@ -38,9 +38,10 @@ function fakeMixingStation({ users = { admin: '' }, info = {} } = {}) {
     ['ch.156.mix.lvl', 0],
     ['ch.156.mix.on', true],
     ['ch.0.preamp.trim', 0],
+    ...extraData,
   ]);
   for (let ch = 0; ch < 4; ch++) {
-    for (const t of TARGETS) {
+    for (const t of targets) {
       data.set(`ch.${ch}.mix.sends.${t.id}.lvl`, ch === 0 ? -12 : -90);
       data.set(`ch.${ch}.mix.sends.${t.id}.on`, ch !== 1);
       if (t.channelType.stereo) data.set(`ch.${ch}.mix.sends.${t.id}.pan`, ch === 0 ? 18.5 : 0);
@@ -67,7 +68,7 @@ function fakeMixingStation({ users = { admin: '' }, info = {} } = {}) {
         return reply(msg, null, 'Invalid credentials');
       }
       if (msg.path === '/console/information') return reply(msg, { channelTypes: CHANNEL_TYPES, ...info });
-      if (msg.path === '/console/mixTargets') return reply(msg, { targets: TARGETS });
+      if (msg.path === '/console/mixTargets') return reply(msg, { targets });
       if (msg.path.startsWith('/console/data/definitions/')) return reply(msg, { definitions: { x: { definition: { min: -37, max: 37 } } } });
       if (msg.path === '/console/data/subscribe') {
         const re = new RegExp('^' + msg.body.path.replace(/\./g, '\\.').replace(/\*/g, '[^.]+') + '$');
@@ -378,6 +379,47 @@ test('Wing aux inputs follow the inputs as their own kind', async () => {
     const layout = new Promise((r) => driver.once('layout', r));
     ms.push('ch.40.cfg.name', 'VOX VERB');
     assert.deepEqual((await layout).channels[0], { ch: 4, kind: 'aux', number: 1, name: 'VOX VERB', color: null, link: null });
+  } finally {
+    await close();
+  }
+});
+
+test('Wing buses feed other buses: phones get them as kind "bus" and a mix never feeds itself', async () => {
+  // Wing: one "Bus" type that Mixing Station says can feed buses (signalTargets type 4).
+  const busType = { type: 4, name: 'Bus', shortName: 'Mix', count: 3, offset: 48, signalTargets: [{ count: 16, channelType: { type: 4, stereo: true } }] };
+  const info = { channelTypes: [{ type: 0, name: 'Input', shortName: 'Ch', count: 4, offset: 0 }, busType] };
+  const targets = ['MC', 'DRUMS', 'HALL V'].map((name, i) => ({ isChannel: true, name, id: i, channelIndex: 48 + i, channelType: { type: 4, stereo: true } }));
+  const extraData = [['ch.48.cfg.name', 'MC'], ['ch.49.cfg.name', 'DRUMS'], ['ch.50.cfg.name', 'HALL V'], ['ch.50.mix.sends.1.lvl', -5], ['ch.50.mix.sends.1.on', true]];
+  const { driver, ms, close } = await setup({ busFilter: { stereoOnly: true, hideUnnamed: true } }, { info, targets, extraData });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    const s = driver.snapshot();
+    assert.deepEqual(s.channels.slice(4).map((c) => [c.ch, c.kind, c.number, c.name]), [
+      [4, 'bus', 1, 'MC'], [5, 'bus', 2, 'DRUMS'], [6, 'bus', 3, 'HALL V'],
+    ]);
+    assert.deepEqual(s.buses.map((b) => [b.name, b.self]), [['MC', 4], ['DRUMS', 5], ['HALL V', 6]], 'each mix names its own bus channel');
+    assert.equal(s.values.get(paramKey(1, 6, 'level')), -5, 'the hall reverb bus feeds DRUMS at -5');
+
+    await driver.set(1, 6, 'level', -90);
+    assert.equal(ms.data.get('ch.50.mix.sends.1.lvl'), -90, 'pulled the hall reverb out of DRUMS');
+    await assert.rejects(driver.set(1, 5, 'level', 0), /itself/);
+
+    // Renaming the bus renames both the mix and the source channel.
+    const layouts = [];
+    driver.on('layout', (l) => layouts.push(l));
+    ms.push('ch.50.cfg.name', 'HALL VERB');
+    await new Promise((r) => setTimeout(r, 50));
+    assert.ok(layouts.some((l) => l.channels?.[0]?.name === 'HALL VERB'));
+    assert.ok(layouts.some((l) => l.buses?.[0]?.name === 'HALL VERB'));
+  } finally {
+    await close();
+  }
+});
+
+test('dLive Mix types are never sources', async () => {
+  const { driver, close } = await setup();
+  try {
+    assert.ok(!driver.snapshot().channels.some((c) => c.kind === 'bus'));
   } finally {
     await close();
   }
