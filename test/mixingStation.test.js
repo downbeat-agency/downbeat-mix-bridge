@@ -363,6 +363,26 @@ test('dLive UFX returns follow the FX returns as their own kind; UFX sends are n
   }
 });
 
+test('Wing aux inputs follow the inputs as their own kind', async () => {
+  const info = { channelTypes: [
+    { type: 0, name: 'Input', shortName: 'Ch', count: 4, offset: 0 },
+    { type: 1, name: 'Aux', shortName: 'Aux', count: 2, offset: 40 },
+    { type: 4, name: 'Bus', shortName: 'Mix', count: 8, offset: 48 },
+  ] };
+  const { driver, ms, close } = await setup({}, { info });
+  try {
+    const s = driver.snapshot();
+    assert.deepEqual(s.channels.slice(4).map((c) => [c.ch, c.kind, c.number, c.name]), [
+      [4, 'aux', 1, 'Aux 1'], [5, 'aux', 2, 'Aux 2'],
+    ]);
+    const layout = new Promise((r) => driver.once('layout', r));
+    ms.push('ch.40.cfg.name', 'VOX VERB');
+    assert.deepEqual((await layout).channels[0], { ch: 4, kind: 'aux', number: 1, name: 'VOX VERB', color: null, link: null });
+  } finally {
+    await close();
+  }
+});
+
 test('UFX returns can be turned off', async () => {
   const info = { channelTypes: [...CHANNEL_TYPES, { type: 102, name: 'UFX Ret', shortName: 'UFX R', count: 2, offset: 144 }] };
   const { driver, close } = await setup({ ufxReturns: { enabled: false } }, { info });

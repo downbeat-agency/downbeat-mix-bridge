@@ -52,6 +52,9 @@ export const DEFAULT_MS_CONFIG = {
   // dLive UFX returns (the external effects rack: most show reverbs come back here), shown
   // after the FX returns. Mixing Station 3.2 calls the type "UFX Ret" (type 102).
   ufxReturns: { enabled: true, type: null, namePattern: 'ufx\\s*ret|ufx\\s*return|^ufx\\s*r$' },
+  // Wing aux inputs (Aux 1-8): stereo line inputs where reverb and playback returns usually
+  // come in. Mixing Station 3.2 calls the type "Aux" (type 1). Phone kind "aux".
+  auxInputs: { enabled: true, type: null, namePattern: '^aux$|aux\\s*in' },
   // Linked stereo inputs shown as one strip on phones (see src/stereoPairs.js).
   // pairs/unpair are input numbers for this rig, e.g. { pairs: [[17, 18]], unpair: [[13, 14]] }.
   stereoPairs: DEFAULT_STEREO_PAIRS,
@@ -91,6 +94,7 @@ export class MixingStationDriver extends EventEmitter {
       busFilter: { ...DEFAULT_MS_CONFIG.busFilter, ...(config.busFilter ?? {}) },
       fxReturns: { ...DEFAULT_MS_CONFIG.fxReturns, ...(config.fxReturns ?? {}) },
       ufxReturns: { ...DEFAULT_MS_CONFIG.ufxReturns, ...(config.ufxReturns ?? {}) },
+      auxInputs: { ...DEFAULT_MS_CONFIG.auxInputs, ...(config.auxInputs ?? {}) },
       stereoPairs: { ...DEFAULT_STEREO_PAIRS, ...(config.stereoPairs ?? {}) },
     };
     this.lastDataAt = 0;
@@ -404,8 +408,9 @@ export class MixingStationDriver extends EventEmitter {
     };
     const fxType = addReturns(this.cfg.fxReturns, 'fx_return', 'FX', (t) => !isUfx(t));
     const ufxType = addReturns(this.cfg.ufxReturns, 'ufx_return', 'UFX', isUfx);
+    const auxType = addReturns(this.cfg.auxInputs, 'aux', 'Aux', (t) => !/send|snd/i.test(`${t.name ?? ''} ${t.shortName ?? ''}`));
     const found = (t) => (t ? `type ${t.type} x${t.count}` : 'not found');
-    this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${found(fxType)}; UFX returns ${found(ufxType)}`), 'info');
+    this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${found(fxType)}; UFX returns ${found(ufxType)}; aux inputs ${found(auxType)}`), 'info');
     this.channels = channels;
     this.byMs = new Map(channels.map((c) => [c.ms, c]));
     this.#relink();
@@ -486,7 +491,7 @@ export class MixingStationDriver extends EventEmitter {
       const c = this.byMs.get(ch);
       if (c) {
         if (p[3] === 'name') {
-          c.name = v ? String(v) : `${{ input: 'Ch', fx_return: 'FX', ufx_return: 'UFX' }[c.kind] ?? c.kind} ${c.number}`;
+          c.name = v ? String(v) : `${{ input: 'Ch', fx_return: 'FX', ufx_return: 'UFX', aux: 'Aux' }[c.kind] ?? c.kind} ${c.number}`;
           // An empty name from the console (not just "no name yet") marks a stereo right half.
           c.blankName = v === '' || (typeof v === 'string' && !v.trim());
         }
