@@ -13,9 +13,16 @@ export const FIELDS = {
   level: 'level',
   mute: 'mute',
   pan: 'pan',
+  gain: 'gain',
+  phantom: 'phantom',
 };
 
+// Channel-wide fields: they belong to the input itself, not to one mix, so a change is heard
+// in every ear mix, front of house and the recording. Phones unlock them one channel at a time.
+export const CHANNEL_FIELDS = new Set(['gain', 'phantom']);
+
 export function paramKey(bus, ch, field) {
+  if (bus === null || bus === undefined) return `p:${ch}:${field}`; // channel-wide (gain, phantom)
   return ch === null || ch === undefined ? `${bus}:m:${field}` : `${bus}:${ch}:${field}`;
 }
 
@@ -35,11 +42,18 @@ export function normalizeValue(field, value) {
       if (typeof value !== 'number' || !Number.isFinite(value)) return { ok: false, reason: 'pan must be a number' };
       return { ok: true, value: Math.round(Math.max(-1, Math.min(1, value)) * 100) / 100 };
     }
+    case 'gain': {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return { ok: false, reason: 'gain must be a number' };
+      return { ok: true, value: Math.round(value * 10) / 10 };
+    }
+    case 'phantom':
+      if (typeof value !== 'boolean') return { ok: false, reason: 'phantom must be true or false' };
+      return { ok: true, value };
     default:
       return { ok: false, reason: `unknown field ${field}` };
   }
 }
 
 export function emptyCapabilities() {
-  return { sendLevel: false, sendMute: false, sendPan: false, busMaster: false, meters: false, names: false, colors: false };
+  return { sendLevel: false, sendMute: false, sendPan: false, busMaster: false, meters: false, names: false, colors: false, gain: false, phantom: false };
 }
