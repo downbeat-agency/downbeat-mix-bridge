@@ -35,7 +35,7 @@ Checked against Mixing Station 3.2.2 with the dLive model in offline mode:
 
 Mixing Station was connected to the running dLive at 10.0.30.2 only to read; it had no login, so it could not change anything.
 
-- Real layout: 128 inputs; 4 mono mixes (BandSUB, MON 1-3), then 19 stereo mixes: MC, VOX 2, VOX 3, VOX 4, GUITAR, SAX, TRUMPET, TROMBONE, DRUMS, BASS, KEYS, PERC, and unnamed spares Mix 13-19. The default bus filter shows phones exactly the 12 named IEMs.
+- Real layout: 128 inputs; 4 mono mixes (BandSUB, MON 1-3), then 19 stereo mixes: MC, VOX 2, VOX 3, VOX 4, GUITAR, SAX, TRUMPET, TROMBONE, DRUMS, BASS, KEYS, PERC, and unnamed spares Mix 13-19. Phones get every mix by default: the sub, the wedges, the 12 named IEMs and the spares (23 on the Green rig). A rig can narrow that with `busFilter` in its config (`stereoOnly`, `hideUnnamed`, `includeNames`, `excludeNames`).
 - Channel names and colors are set by the A1 and grouped by color (drums blue, band green/red, horns yellow, vocals cyan), matching the locked Edit group design.
 - Connecting and syncing took about 4 s. A full subscription delivers ~17,900 values (2.4 MB) over ~5.4 s, so the driver waits for the stream to go quiet before phones get a snapshot.
 - Live traffic: ~15 updates/s while someone drags a send (a musician on Mixing Station was mixing during the read). Meters for 128 inputs + 23 mixes at 100 ms are ~19 KB/s into the bridge.
