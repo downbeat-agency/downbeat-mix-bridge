@@ -109,7 +109,12 @@ function fakeMixingStation({ users = { admin: '' }, info = {}, targets = TARGETS
   };
 }
 
+// Most tests address MC as bus 0, so they run with a rig narrowed to named stereo IEMs.
+// Pass busFilter: {} to get the bridge's default (every mix).
+const IEM_ONLY = { stereoOnly: true, hideUnnamed: true };
+
 async function setup(driverConfig = {}, msOptions = {}) {
+  driverConfig = { busFilter: IEM_ONLY, ...driverConfig };
   const ms = fakeMixingStation(msOptions);
   await new Promise((r) => ms.server.listen(0, '127.0.0.1', r));
   const driver = new MixingStationDriver({ wsUrl: `ws://127.0.0.1:${ms.server.address().port}/`, settleMs: 50, quietMs: 150, writeErrorWindowMs: 60, auth: { user: 'admin', password: '' }, ...driverConfig });
@@ -128,7 +133,24 @@ async function setup(driverConfig = {}, msOptions = {}) {
   };
 }
 
-test('offers only named stereo IEM mixes: no sub, wedges, spares, groups or FX', async () => {
+test('by default phones get every mix: sub, wedges, IEMs and spares; never groups or FX sends', async () => {
+  const { driver, close } = await setup({ busFilter: {} });
+  try {
+    const s = driver.snapshot();
+    assert.deepEqual(s.buses.map((b) => [b.name, b.stereo]), [
+      ['BandSUB', false], ['MON 1', false], ['MON 2', false], ['MON 3', false],
+      ['MC', true], ['VOX 2', true], ['DRUMS', true], ['Mix 13', true],
+    ]);
+    assert.deepEqual(s.buses.map((b) => b.bus), [0, 1, 2, 3, 4, 5, 6, 7]);
+    const v = s.values;
+    assert.equal(v.get(paramKey(4, 0, 'level')), -12, 'MC is bus 4 here and still reads its sends');
+    await assert.rejects(driver.set(0, 0, 'pan', 0), /not supported/, 'mono mixes have no pan');
+  } finally {
+    await close();
+  }
+});
+
+test('a rig can narrow phones to named stereo IEM mixes: no sub, wedges, spares, groups or FX', async () => {
   const { driver, close } = await setup();
   try {
     const s = driver.snapshot();

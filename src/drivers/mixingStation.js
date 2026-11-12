@@ -74,9 +74,11 @@ export const DEFAULT_MS_CONFIG = {
   // Mixing Station color enum -> our names. 0 (Black) is "no color" on dLive.
   colorMap: { 0: null, 1: 'red', 2: 'green', 3: 'yellow', 4: 'blue', 5: 'purple', 6: 'lightblue', 7: 'white' },
   meters: { enabled: true, intervalMs: 100 },
-  // Which mixes phones may use. stereoOnly hides the sub and wedges (mono mixes);
-  // hideUnnamed hides spare mixes still called "Mix 13" etc. includeNames, if set, wins.
-  busFilter: { stereoOnly: true, hideUnnamed: true, includeNames: null, excludeNames: [] },
+  // Which mixes phones may use. By default every mix on the console: mono (sub, wedges)
+  // and stereo, named or still called "Mix 13" (Diego, 2026-11-11). A rig can narrow it:
+  // stereoOnly hides mono mixes, hideUnnamed hides spares still called "Mix 13" etc.,
+  // excludeNames drops names, and includeNames, if set, wins.
+  busFilter: { stereoOnly: false, hideUnnamed: false, includeNames: null, excludeNames: [] },
   // Initial sync: wait until no value has arrived for quietMs (at least settleMs, at most maxSyncMs).
   settleMs: 300,
   quietMs: 600,
