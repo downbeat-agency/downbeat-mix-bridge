@@ -117,3 +117,18 @@ test('an update held back by connected phones is retried soon, not 12 hours late
     u.stop();
   }
 });
+
+test('an install is reported before the restart, and lastUpdate reads it back', async () => {
+  const { lastUpdate } = await import('../src/updater.js');
+  const dir = await rig();
+  const events = [];
+  const { fetchImpl } = github();
+  const u = new Updater({ currentVersion: '0.1.0', installDir: dir, isIdle: () => true, log: () => {},
+    exit: (c) => events.push(`exit ${c}`), fetchImpl, extract: fakeExtract,
+    onChecked: (r) => { events.push(`report ${r.action} ${r.version}`); } });
+  await u.checkNow();
+  assert.deepEqual(events, ['report installed v0.2.0', `exit ${RESTART_CODE}`], 'reported first, then restarted');
+  const last = await lastUpdate(dir);
+  assert.deepEqual([last.from, last.to], ['0.1.0', 'v0.2.0']);
+  assert.equal(await lastUpdate(join(dir, 'nowhere')), null);
+});
