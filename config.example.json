@@ -9,12 +9,33 @@
   "logDir": "/Users/Shared/DownbeatMix/logs",
   "mixingStation": {
     "wsUrl": "ws://127.0.0.1:8091/",
-    "auth": { "user": "admin", "password": "set-in-mixing-station" },
+    "auth": {
+      "user": "admin",
+      "password": "set-in-mixing-station"
+    },
     "maxInputs": null,
-    "ufxReturns": { "enabled": true },
-    "auxInputs": { "enabled": true },
-    "busSends": { "enabled": true },
-    "stereoPairs": { "auto": true, "sameName": true, "blankPartner": true, "pairs": [], "unpair": [] },
-    "meters": { "enabled": true, "intervalMs": 100 }
+    "ufxReturns": {
+      "enabled": true
+    },
+    "auxInputs": {
+      "enabled": true
+    },
+    "busSends": {
+      "enabled": true
+    },
+    "stereoPairs": {
+      "auto": true,
+      "sameName": true,
+      "blankPartner": true,
+      "pairs": [],
+      "unpair": []
+    },
+    "meters": {
+      "enabled": true,
+      "intervalMs": 100
+    }
+  },
+  "status": {
+    "token": null
   }
 }

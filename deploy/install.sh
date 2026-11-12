@@ -45,6 +45,30 @@ if [ ! -f "$DEST/config.json" ]; then
   echo "Created $DEST/config.json for rig \"$RIG_NAME\""
 fi
 
+# Rig status on GitHub (downbeat-agency/downbeat-rig-status): lets someone at home see which
+# rigs run the newest bridge. Asks once for the status token if this rig has none yet.
+# Set DOWNBEAT_STATUS_TOKEN to skip the question; press Return to skip it for now.
+HAS_STATUS=$("$DEST/node/bin/node" -e 'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(c.status?.token?"yes":"no")' "$DEST/config.json")
+if [ "$HAS_STATUS" = "no" ]; then
+  STATUS_TOKEN="${DOWNBEAT_STATUS_TOKEN:-}"
+  if [ -z "$STATUS_TOKEN" ] && [ -t 0 ]; then
+    echo "Rig status token (from Diego; press Return to skip):"
+    read -r -s STATUS_TOKEN || STATUS_TOKEN=""
+  fi
+  if [ -n "$STATUS_TOKEN" ]; then
+    "$DEST/node/bin/node" -e '
+      const fs = require("fs"); const [file, token] = process.argv.slice(1);
+      const c = JSON.parse(fs.readFileSync(file, "utf8"));
+      c.status = { ...(c.status || {}), token };
+      fs.writeFileSync(file, JSON.stringify(c, null, 2) + "\n");
+    ' "$DEST/config.json" "$STATUS_TOKEN"
+    chmod 600 "$DEST/config.json"
+    echo "Rig status reporting on."
+  else
+    echo "Rig status reporting off (no token). Run the installer again to add one."
+  fi
+fi
+
 PLIST="$HOME/Library/LaunchAgents/com.downbeat.mixbridge.plist"
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<PL

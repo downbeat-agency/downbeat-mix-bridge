@@ -5,7 +5,8 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Updater, confirmUpdate } from './updater.js';
+import { Updater, confirmUpdate, lastUpdate } from './updater.js';
+import { StatusReporter } from './statusReport.js';
 import { attachWebSocket } from './wsServer.js';
 import { Bridge } from './bridge.js';
 import { FakeDliveDriver } from './drivers/fakeDlive.js';
@@ -57,12 +58,16 @@ server.listen(port, '0.0.0.0', () => log(`mix bridge ${version} for ${rigName} o
 // Self-update from GitHub when the rig has internet (warehouse), never while phones use it.
 let updater = null;
 if (args.config && config.update?.enabled !== false) {
+  // Rig status on GitHub after every check (needs config.status.token; see statusReport.js).
+  const reporter = new StatusReporter({ rigName, version, health: () => bridge.health(), log, config: config.status ?? {} });
+  if (!reporter.enabled) log('rig status reporting off (no status token in config.json)');
   updater = new Updater({
     currentVersion: version,
     installDir,
     config: config.update ?? {},
     isIdle: () => bridge.isIdle(config.update?.idleMs ?? 10 * 60 * 1000),
     log,
+    onChecked: async (result) => reporter.report(result, await lastUpdate(installDir)),
   });
   updater.start();
 }

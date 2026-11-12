@@ -46,10 +46,11 @@ export class Updater {
    * @param {(code: number) => void} [o.exit]
    * @param {typeof fetch} [o.fetchImpl]
    * @param {(file: string, dir: string) => Promise<void>} [o.extract]
+   * @param {(result: object) => Promise<void>|void} [o.onChecked]  after every check (rig status)
    */
-  constructor({ currentVersion, installDir, isIdle, log, exit = (c) => process.exit(c), fetchImpl = fetch, extract = untar, config = {} }) {
+  constructor({ currentVersion, installDir, isIdle, log, exit = (c) => process.exit(c), fetchImpl = fetch, extract = untar, config = {}, onChecked = null }) {
     this.cfg = { ...DEFAULT_UPDATE_CONFIG, ...config };
-    Object.assign(this, { currentVersion, installDir, isIdle, log, exit, fetchImpl, extract });
+    Object.assign(this, { currentVersion, installDir, isIdle, log, exit, fetchImpl, extract, onChecked });
     this.timer = null;
     this.busy = false;
     this.lastResult = null;
@@ -60,6 +61,7 @@ export class Updater {
     const schedule = (ms) => {
       this.timer = setTimeout(async () => {
         const result = await this.checkNow().catch(() => null);
+        if (result && result.action !== 'busy') await Promise.resolve(this.onChecked?.(result)).catch(() => {});
         schedule(result?.action === 'waiting' ? this.cfg.retryWhileBusyMs : this.cfg.checkEveryMs);
       }, ms);
       this.timer.unref?.();
@@ -123,6 +125,8 @@ export class Updater {
       }));
       this.log(`installed ${version}; restarting`);
       this.lastResult = { action: 'installed', version };
+      // Report before restarting; the new version reports itself on its first check.
+      await Promise.resolve(this.onChecked?.(this.lastResult)).catch(() => {});
       this.exit(RESTART_CODE);
       return this.lastResult;
     } catch (e) {
@@ -168,6 +172,16 @@ export class Updater {
 }
 
 /** Marks the running version as good once it has stayed up (launcher stops watching). */
+/** The last install recorded by the updater: { from, to, at } or null. */
+export async function lastUpdate(installDir) {
+  try {
+    const { from, to, at } = JSON.parse(await readFile(join(installDir, 'update-state.json'), 'utf8'));
+    return to ? { from: from ?? null, to, at: at ?? null } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function confirmUpdate(installDir) {
   const file = join(installDir, 'update-state.json');
   try {
