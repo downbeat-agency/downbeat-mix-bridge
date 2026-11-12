@@ -36,6 +36,6 @@
     }
   },
   "status": {
-    "token": null
+    "url": "https://checkin-production-441c6f38.up.railway.app/checkin"
   }
 }

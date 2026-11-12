@@ -4,15 +4,12 @@ import { StatusReporter, rigSlug, updateStatus } from '../src/statusReport.js';
 
 const health = () => ({ console: { connected: true, name: 'dLive Green', model: 'dlive' }, phones: [{ personId: 'p1' }, { personId: 'p2' }] });
 
-function github({ existing = null, putStatus = 201, getStatus } = {}) {
+function service({ status = 200, fail } = {}) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
-    calls.push({ url, method: init.method ?? 'GET', headers: init.headers, body: init.body ? JSON.parse(init.body) : null });
-    if ((init.method ?? 'GET') === 'GET') {
-      const status = getStatus ?? (existing ? 200 : 404);
-      return { status, ok: status === 200, json: async () => ({ sha: existing }) };
-    }
-    return { status: putStatus, ok: putStatus < 300, json: async () => ({}) };
+    calls.push({ url, method: init.method, headers: init.headers, body: JSON.parse(init.body) });
+    if (fail) throw new Error(fail);
+    return { status, ok: status < 300, json: async () => ({}) };
   };
   return { fetchImpl, calls };
 }
@@ -33,60 +30,52 @@ test('updater results map to the statuses on the rig table', () => {
   assert.equal(updateStatus(null), null);
 });
 
-test('without a token the rig does not report and makes no request', async () => {
-  const { fetchImpl, calls } = github();
-  const r = new StatusReporter({ rigName: 'dLive Green', version: '0.5.2', health, fetchImpl });
+test('turned off with status.url null: no request', async () => {
+  const { fetchImpl, calls } = service();
+  const r = new StatusReporter({ rigName: 'dLive Green', version: '0.5.2', health, fetchImpl, config: { url: null } });
   assert.equal(r.enabled, false);
   assert.deepEqual(await r.report({ action: 'current', version: 'v0.5.2' }), { action: 'disabled' });
   assert.equal(calls.length, 0);
 });
 
-test('writes rigs/<rig>.json with version, update result, console and phones', async () => {
-  const { fetchImpl, calls } = github({ existing: 'abc123' });
+test('on by default: posts the check-in with version, update result, console and phones, no secret', async () => {
+  const { fetchImpl, calls } = service();
   const now = Date.parse('2026-11-12T17:00:00Z');
-  const r = new StatusReporter({ rigName: 'dLive Green', version: '0.5.2', health, fetchImpl, now: () => now,
-    startedAt: now - 3600_000, config: { token: 'secret-token' } });
+  const r = new StatusReporter({ rigName: 'dLive Green', version: '0.5.2', health, fetchImpl, now: () => now, startedAt: now - 3600_000 });
+  assert.equal(r.enabled, true);
   const out = await r.report({ action: 'current', version: 'v0.5.2' }, { from: '0.5.1', to: 'v0.5.2', at: '2026-11-12T09:00:00Z' });
   assert.deepEqual(out, { action: 'reported', path: 'rigs/dlive-green.json' });
-  const [get, put] = calls;
-  assert.equal(get.url, 'https://api.github.com/repos/downbeat-agency/downbeat-rig-status/contents/rigs/dlive-green.json');
-  assert.equal(get.headers.authorization, 'Bearer secret-token');
-  assert.equal(put.method, 'PUT');
-  assert.equal(put.body.sha, 'abc123', 'updates the existing file');
-  assert.match(put.body.message, /dLive Green: 0\.5\.2 \(up_to_date\)/);
-  const file = JSON.parse(Buffer.from(put.body.content, 'base64').toString());
-  assert.equal(file.rig, 'dLive Green');
-  assert.equal(file.version, '0.5.2');
-  assert.equal(file.latestRelease, 'v0.5.2');
-  assert.equal(file.update.status, 'up_to_date');
-  assert.deepEqual(file.lastUpdate, { from: '0.5.1', to: 'v0.5.2', at: '2026-11-12T09:00:00Z' });
-  assert.deepEqual(file.console, { connected: true, name: 'dLive Green', model: 'dlive' });
-  assert.equal(file.phones, 2);
-  assert.equal(file.uptimeSeconds, 3600);
-  assert.equal(file.reportedAt, '2026-11-12T17:00:00.000Z');
-  assert.doesNotMatch(JSON.stringify(file), /secret-token/, 'the token is never written');
+  assert.equal(calls.length, 1);
+  const [post] = calls;
+  assert.equal(post.url, 'https://checkin-production-441c6f38.up.railway.app/checkin');
+  assert.equal(post.method, 'POST');
+  assert.equal(post.headers.authorization, undefined, 'no secret is sent');
+  const b = post.body;
+  assert.equal(b.rig, 'dLive Green');
+  assert.equal(b.version, '0.5.2');
+  assert.equal(b.latestRelease, 'v0.5.2');
+  assert.equal(b.update.status, 'up_to_date');
+  assert.deepEqual(b.lastUpdate, { from: '0.5.1', to: 'v0.5.2', at: '2026-11-12T09:00:00Z' });
+  assert.deepEqual(b.console, { connected: true, name: 'dLive Green', model: 'dlive' });
+  assert.equal(b.phones, 2);
+  assert.equal(b.uptimeSeconds, 3600);
 });
 
-test('the first report creates the file; GitHub errors and no internet fail quietly', async () => {
-  const first = github();
-  const r = new StatusReporter({ rigName: 'Wing Blue', version: '0.5.2', health, fetchImpl: first.fetchImpl, config: { token: 't' } });
-  assert.equal((await r.report({ action: 'current', version: 'v0.5.2' })).action, 'reported');
-  assert.equal(first.calls[1].body.sha, undefined, 'no sha for a new file');
-
+test('service errors and no internet fail quietly', async () => {
   const logs = [];
-  const denied = github({ putStatus: 403 });
-  const r2 = new StatusReporter({ rigName: 'Wing Blue', version: '0.5.2', health, fetchImpl: denied.fetchImpl, log: (m) => logs.push(m), config: { token: 't' } });
-  assert.deepEqual(await r2.report({ action: 'current' }), { action: 'failed', error: 'GitHub 403' });
-  const offline = new StatusReporter({ rigName: 'Wing Blue', version: '0.5.2', health, config: { token: 't' },
-    fetchImpl: async () => { throw new Error('getaddrinfo ENOTFOUND api.github.com'); }, log: (m) => logs.push(m) });
-  assert.equal((await offline.report({ action: 'offline' })).action, 'failed');
+  const busy = service({ status: 429 });
+  const r = new StatusReporter({ rigName: 'Wing Blue', version: '0.5.2', health, fetchImpl: busy.fetchImpl, log: (m) => logs.push(m) });
+  assert.deepEqual(await r.report({ action: 'current' }), { action: 'failed', error: 'check-in 429' });
+  const offline = service({ fail: 'getaddrinfo ENOTFOUND' });
+  const r2 = new StatusReporter({ rigName: 'Wing Blue', version: '0.5.2', health, fetchImpl: offline.fetchImpl, log: (m) => logs.push(m) });
+  assert.equal((await r2.report({ action: 'offline' })).action, 'failed');
   assert.equal(logs.length, 2);
 });
 
 test('a failed update check is reported with its message', async () => {
-  const { fetchImpl, calls } = github();
-  const r = new StatusReporter({ rigName: 'dLive Green', version: '0.5.1', health, fetchImpl, config: { token: 't' } });
+  const { fetchImpl, calls } = service();
+  const r = new StatusReporter({ rigName: 'dLive Green', version: '0.5.1', health, fetchImpl });
   await r.report({ action: 'error', error: 'GitHub 503' });
-  const file = JSON.parse(Buffer.from(calls[1].body.content, 'base64').toString());
-  assert.deepEqual([file.update.status, file.update.message, file.latestRelease], ['check_failed', 'GitHub 503', null]);
+  const b = calls[0].body;
+  assert.deepEqual([b.update.status, b.update.message, b.latestRelease], ['check_failed', 'GitHub 503', null]);
 });

@@ -1,17 +1,16 @@
-// Rig status on GitHub, so someone at home can see which rigs run the newest bridge
-// without a phone. After every update check the bridge writes its own file,
-// rigs/<rig>.json, in a small private repo (downbeat-agency/downbeat-rig-status). A GitHub
-// Action there turns the files into a table on the repo's front page.
+// Rig status, so someone at home can see which rigs run the newest bridge without a
+// phone. After every update check the bridge posts a small check-in (version, update
+// result, console, phone count) to the rig check-in service on Railway. That service
+// writes rigs/<rig>.json in the private repo downbeat-agency/downbeat-rig-status, and a
+// GitHub Action there turns the files into a table on the repo's front page.
 //
-// Needs a GitHub token that can write that one repo (fine-grained, Contents: read and
-// write), set once per rig in config.json as "status": { "token": "..." }. With no token
-// the bridge simply does not report. No internet: the report fails quietly and the next
-// check tries again.
+// Nothing to set up on a rig: no token or secret lives here. To turn it off, set
+// "status": { "url": null } in config.json. No internet: the check-in fails quietly and
+// the next update check tries again.
 import { hostname } from 'node:os';
 
 export const DEFAULT_STATUS_CONFIG = {
-  repo: 'downbeat-agency/downbeat-rig-status',
-  token: null,
+  url: 'https://checkin-production-441c6f38.up.railway.app/checkin',
   timeoutMs: 20 * 1000,
 };
 
@@ -52,9 +51,9 @@ export class StatusReporter {
     this.path = `rigs/${rigSlug(rigName)}.json`;
   }
 
-  get enabled() { return Boolean(this.cfg.token); }
+  get enabled() { return Boolean(this.cfg.url); }
 
-  /** The JSON written for this rig. */
+  /** The check-in sent for this rig. */
   body(result, lastUpdate = null) {
     const h = this.health?.() ?? {};
     return {
@@ -71,40 +70,23 @@ export class StatusReporter {
       phones: Array.isArray(h.phones) ? h.phones.length : 0,
       uptimeSeconds: Math.max(0, Math.round((this.now() - this.startedAt) / 1000)),
       host: hostname(),
-      reportedAt: new Date(this.now()).toISOString(),
     };
   }
 
-  /** Writes this rig's file. Never throws; returns what happened. */
+  /** Posts this rig's check-in. Never throws; returns what happened. */
   async report(result, lastUpdate = null) {
     if (!this.enabled) return { action: 'disabled' };
-    const url = `https://api.github.com/repos/${this.cfg.repo}/contents/${this.path}`;
-    const headers = {
-      authorization: `Bearer ${this.cfg.token}`,
-      accept: 'application/vnd.github+json',
-      'user-agent': 'downbeat-mix-bridge',
-      'x-github-api-version': '2022-11-28',
-    };
     try {
-      const signal = AbortSignal.timeout(this.cfg.timeoutMs);
-      const existing = await this.fetchImpl(url, { headers, signal });
-      if (existing.status !== 200 && existing.status !== 404) throw new Error(`GitHub ${existing.status}`);
-      const sha = existing.status === 200 ? (await existing.json()).sha : undefined;
-      const body = this.body(result, lastUpdate);
-      const res = await this.fetchImpl(url, {
-        method: 'PUT',
-        headers: { ...headers, 'content-type': 'application/json' },
-        signal,
-        body: JSON.stringify({
-          message: `${this.rigName}: ${this.version} (${body.update.status ?? 'checked in'})`,
-          content: Buffer.from(`${JSON.stringify(body, null, 2)}\n`).toString('base64'),
-          ...(sha ? { sha } : {}),
-        }),
+      const res = await this.fetchImpl(this.cfg.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'user-agent': `downbeat-mix-bridge/${this.version}` },
+        signal: AbortSignal.timeout(this.cfg.timeoutMs),
+        body: JSON.stringify(this.body(result, lastUpdate)),
       });
-      if (!res.ok) throw new Error(`GitHub ${res.status}`);
+      if (!res.ok) throw new Error(`check-in ${res.status}`);
       return { action: 'reported', path: this.path };
     } catch (e) {
-      this.log(`status report failed: ${e.message}`);
+      this.log(`status check-in failed: ${e.message}`);
       return { action: 'failed', error: e.message };
     }
   }

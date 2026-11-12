@@ -58,9 +58,9 @@ server.listen(port, '0.0.0.0', () => log(`mix bridge ${version} for ${rigName} o
 // Self-update from GitHub when the rig has internet (warehouse), never while phones use it.
 let updater = null;
 if (args.config && config.update?.enabled !== false) {
-  // Rig status on GitHub after every check (needs config.status.token; see statusReport.js).
+  // Rig status check-in after every update check (no secret; see statusReport.js).
   const reporter = new StatusReporter({ rigName, version, health: () => bridge.health(), log, config: config.status ?? {} });
-  if (!reporter.enabled) log('rig status reporting off (no status token in config.json)');
+  if (!reporter.enabled) log('rig status check-in off (status.url is null in config.json)');
   updater = new Updater({
     currentVersion: version,
     installDir,
