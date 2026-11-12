@@ -99,6 +99,26 @@ export const DEFAULT_MS_CONFIG = {
 
 const MIX_TYPE = 4;
 
+/**
+ * The console's own number for a mix: its place in the Mix channel group Mixing Station
+ * reports it in (dLive "Mix 5", Wing "Bus 7"). A stereo mix is one number on both consoles.
+ * If Mixing Station lists stereo mixes as their own group ("St Mix"), they count from 1 there.
+ */
+export function mixNumbers(types) {
+  const groups = [];
+  let running = 0;
+  for (const t of types) {
+    const start = Number.isInteger(t.offset) ? t.offset : running;
+    const count = Number(t.count) || 0;
+    if (t.type === MIX_TYPE && count > 0) groups.push({ start, count });
+    running = start + count;
+  }
+  return (channelIndex) => {
+    const g = groups.find((x) => channelIndex >= x.start && channelIndex < x.start + x.count);
+    return g ? channelIndex - g.start + 1 : null;
+  };
+}
+
 export class MixingStationDriver extends EventEmitter {
   constructor(config = {}) {
     super();
@@ -165,7 +185,7 @@ export class MixingStationDriver extends EventEmitter {
       model: this.consoleModel ?? null,
       capabilities: this.capabilities,
       channels: this.channels.map(({ ms, blankName, ...c }) => ({ ...c })),
-      buses: this.buses.map(({ bus, name, stereo, channel }) => ({ bus, name, stereo, ...this.#selfOf(channel) })),
+      buses: this.buses.map(({ bus, name, stereo, channel, number }) => ({ bus, name, stereo, ...(number ? { number } : {}), ...this.#selfOf(channel) })),
       values: new Map(this.values),
     };
   }
@@ -357,7 +377,9 @@ export class MixingStationDriver extends EventEmitter {
         if (f.hideUnnamed && (!name || unnamed.test(name))) return false;
         return true;
       });
-      this.buses = mixes.map((t, bus) => ({ bus, name: t.name, stereo: !!t.channelType.stereo, send: t.id, channel: t.channelIndex }));
+      const numberOf = mixNumbers(info?.channelTypes ?? []);
+      this.buses = mixes.map((t, bus) => ({ bus, name: t.name, stereo: !!t.channelType.stereo, send: t.id,
+        channel: t.channelIndex, number: numberOf(t.channelIndex) }));
       this.sendToBus = new Map(this.buses.map((b) => [b.send, b.bus]));
       this.channelToBus = new Map(this.buses.map((b) => [b.channel, b.bus]));
 
@@ -571,7 +593,8 @@ export class MixingStationDriver extends EventEmitter {
       const bus = this.channelToBus?.get(ch);
       if (bus !== undefined && p[3] === 'name' && v) {
         this.buses[bus].name = String(v);
-        return this.#layout({ buses: [{ bus, name: this.buses[bus].name, stereo: this.buses[bus].stereo }] });
+        const { name, stereo, number } = this.buses[bus];
+        return this.#layout({ buses: [{ bus, name, stereo, ...(number ? { number } : {}) }] });
       }
       return;
     }
