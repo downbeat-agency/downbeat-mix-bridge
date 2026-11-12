@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { attachWebSocket } from '../src/wsServer.js';
 import { MixingStationDriver } from '../src/drivers/mixingStation.js';
 import { paramKey } from '../src/model.js';
+import { mixNumbers } from '../src/drivers/mixingStation.js';
 
 // 4 inputs; send targets laid out like the real Green rig show file (2026-11-07):
 // mono BandSUB + wedges, then stereo IEMs, then an unnamed spare, then groups/FX.
@@ -142,6 +143,7 @@ test('by default phones get every mix: sub, wedges, IEMs and spares; never group
       ['MC', true], ['VOX 2', true], ['DRUMS', true], ['Mix 13', true],
     ]);
     assert.deepEqual(s.buses.map((b) => b.bus), [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert.deepEqual(s.buses.map((b) => b.number), [1, 2, 3, 4, 5, 6, 7, 8], 'the console\'s own mix numbers');
     const v = s.values;
     assert.equal(v.get(paramKey(4, 0, 'level')), -12, 'MC is bus 4 here and still reads its sends');
     await assert.rejects(driver.set(0, 0, 'pan', 0), /not supported/, 'mono mixes have no pan');
@@ -155,7 +157,8 @@ test('a rig can narrow phones to named stereo IEM mixes: no sub, wedges, spares,
   try {
     const s = driver.snapshot();
     assert.deepEqual(s.buses.map((b) => b.name), ['MC', 'VOX 2', 'DRUMS']);
-    assert.deepEqual(s.buses[0], { bus: 0, name: 'MC', stereo: true });
+    assert.deepEqual(s.buses[0], { bus: 0, name: 'MC', stereo: true, number: 5 },
+      'a narrowed list keeps the desk number: MC is still Mix 5');
     assert.equal(s.channels.length, 6, '4 inputs then 2 FX returns');
     assert.equal(s.channels[0].name, 'Kick');
     assert.equal(s.channels[0].color, 'yellow');
@@ -545,4 +548,18 @@ test('Wing preamps: headamp gain and 48V where the source has a headamp, else tr
   } finally {
     await close();
   }
+});
+
+test('mix numbers follow the console: one number per mix, stereo included, per Mix group', () => {
+  const shared = mixNumbers([{ type: 0, count: 128, offset: 0 }, { type: 4, count: 23, offset: 152 }]);
+  assert.equal(shared(152), 1);
+  assert.equal(shared(156), 5, 'a stereo mix after four mono ones is Mix 5');
+  assert.equal(shared(174), 23);
+  assert.equal(shared(175), null, 'past the Mix group');
+  assert.equal(shared(10), null, 'inputs are not mixes');
+  // If Mixing Station lists mono and stereo mixes as separate groups, each counts from 1.
+  const split = mixNumbers([{ type: 0, count: 128 }, { type: 4, name: 'Mix', count: 4 }, { type: 4, name: 'St Mix', count: 19 }]);
+  assert.equal(split(128), 1);
+  assert.equal(split(132), 1, 'first stereo mix');
+  assert.equal(split(144), 13, 'the spare the desk calls "Mix 13"');
 });

@@ -28,7 +28,7 @@ export class FakeDliveDriver extends EventEmitter {
       return { ch, kind: 'input', number: ch + 1, name: preset ? preset[0] : `Ch ${ch + 1}`, color: uncolored || !preset ? null : preset[1], link: null, preamp };
     });
     for (const [ch, partner] of findPairs(this.channels)) this.channels[ch].link = partner;
-    this.buses = DEFAULT_BUSES.map((n, bus) => ({ bus, name: `Stereo Mix ${bus + 1} ${n}`, stereo: true }));
+    this.buses = DEFAULT_BUSES.map((n, bus) => ({ bus, name: `Stereo Mix ${bus + 1} ${n}`, stereo: true, number: bus + 1 }));
     this.values = new Map();
     for (const b of this.buses) {
       this.values.set(paramKey(b.bus, null, 'level'), 0);
