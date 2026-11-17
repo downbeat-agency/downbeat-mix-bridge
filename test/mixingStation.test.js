@@ -445,7 +445,30 @@ test('dLive groups that feed mixes: phones get them as kind "group" and "st_grou
   }
 });
 
-test('groups stay out when Mixing Station does not say they feed mixes, or the rig turns them off', async () => {
+test('dLive stereo groups with no signalTargets are found by their sends (Green rig, 2026-11-17)', async () => {
+  // What the Green dLive reports: one "St Group" type, nothing about what it can feed.
+  const info = { channelTypes: [...CHANNEL_TYPES, { type: 5, name: 'St Group', shortName: 'StGrp', count: 6, offset: 175 }] };
+  const extraData = [['ch.175.cfg.name', 'HORNS'], ['ch.175.mix.sends.4.lvl', -6], ['ch.175.mix.sends.4.on', true], ['ch.176.mix.sends.4.lvl', -90]];
+  const { driver, ms, close } = await setup({}, { info, extraData });
+  try {
+    const s = driver.snapshot();
+    assert.deepEqual(s.channels.slice(6).map((c) => [c.ch, c.kind, c.number, c.name]), [
+      [6, 'st_group', 1, 'HORNS'], [7, 'st_group', 2, 'St Grp 2'], [8, 'st_group', 3, 'St Grp 3'],
+      [9, 'st_group', 4, 'St Grp 4'], [10, 'st_group', 5, 'St Grp 5'], [11, 'st_group', 6, 'St Grp 6'],
+    ]);
+    assert.ok(!('unconfirmed' in s.channels[6]), 'phones never see the bridge\'s own bookkeeping');
+    assert.equal(s.values.get(paramKey(0, 6, 'level')), -6);
+    await driver.set(0, 6, 'level', -20);
+    assert.equal(ms.data.get('ch.175.mix.sends.4.lvl'), -20);
+    const meters = await driver.firstMeters;
+    assert.equal(meters.ch.length, 12, 'one meter per channel, groups included');
+    assert.equal(meters.bus.length, driver.snapshot().buses.length);
+  } finally {
+    await close();
+  }
+});
+
+test('groups stay out when nothing says they feed mixes, or the rig turns them off', async () => {
   const group = { type: 5, name: 'Group', shortName: 'Grp', count: 2, offset: 300 };
   const feeding = { ...group, signalTargets: [{ count: 8, channelType: { type: 4, stereo: true } }] };
   for (const [config, type, expected] of [
