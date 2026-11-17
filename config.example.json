@@ -23,6 +23,9 @@
     "busSends": {
       "enabled": true
     },
+    "groups": {
+      "enabled": true
+    },
     "stereoPairs": {
       "auto": true,
       "sameName": true,

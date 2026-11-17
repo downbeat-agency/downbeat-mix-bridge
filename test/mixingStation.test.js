@@ -412,6 +412,56 @@ test('Wing aux inputs follow the inputs as their own kind', async () => {
   }
 });
 
+test('dLive groups that feed mixes: phones get them as kind "group" and "st_group"', async () => {
+  // A dLive show that feeds the ears from groups: Mixing Station lists the group types with
+  // the mixes they can send to. Mute and DCA groups, and a group type with no sends, stay out.
+  const toMix = [{ count: 8, channelType: { type: 4, stereo: true } }];
+  const info = { channelTypes: [
+    ...CHANNEL_TYPES,
+    { type: 5, name: 'Group', shortName: 'Grp', count: 2, offset: 300, signalTargets: toMix },
+    { type: 6, name: 'St Group', shortName: 'St Grp', count: 1, offset: 310, signalTargets: toMix },
+    { type: 20, name: 'Mute Group', shortName: 'MGrp', count: 8, offset: 400, signalTargets: toMix },
+    { type: 21, name: 'DCA', shortName: 'DCA', count: 8, offset: 420 },
+  ] };
+  const extraData = [['ch.300.cfg.name', 'HORNS'], ['ch.300.mix.sends.4.lvl', -6], ['ch.300.mix.sends.4.on', true], ['ch.310.cfg.name', 'BGM']];
+  const { driver, ms, close } = await setup({}, { info, extraData });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    const s = driver.snapshot();
+    assert.deepEqual(s.channels.slice(6).map((c) => [c.ch, c.kind, c.number, c.name]), [
+      [6, 'group', 1, 'HORNS'], [7, 'group', 2, 'Grp 2'], [8, 'st_group', 1, 'BGM'],
+    ]);
+    assert.equal(s.channels[6].preamp, null, 'no gain on a group');
+    assert.equal(s.values.get(paramKey(0, 6, 'level')), -6, 'the horns group feeds MC at -6');
+
+    await driver.set(0, 6, 'level', -90);
+    assert.equal(ms.data.get('ch.300.mix.sends.4.lvl'), -90, 'pulled the horns group out of MC');
+
+    const changed = new Promise((r) => driver.once('change', r));
+    ms.push('ch.310.mix.sends.4.lvl', -3);
+    assert.deepEqual(await changed, { bus: 0, ch: 8, field: 'level', value: -3 }, 'the desk turns BGM up in MC');
+  } finally {
+    await close();
+  }
+});
+
+test('groups stay out when Mixing Station does not say they feed mixes, or the rig turns them off', async () => {
+  const group = { type: 5, name: 'Group', shortName: 'Grp', count: 2, offset: 300 };
+  const feeding = { ...group, signalTargets: [{ count: 8, channelType: { type: 4, stereo: true } }] };
+  for (const [config, type, expected] of [
+    [{}, group, []],
+    [{ groups: { enabled: false } }, feeding, []],
+    [{ groups: { type: 5 } }, group, ['group', 'group']],
+  ]) {
+    const { driver, close } = await setup(config, { info: { channelTypes: [...CHANNEL_TYPES, type] } });
+    try {
+      assert.deepEqual(driver.snapshot().channels.slice(6).map((c) => c.kind), expected);
+    } finally {
+      await close();
+    }
+  }
+});
+
 test('Wing buses feed other buses: phones get them as kind "bus" and a mix never feeds itself', async () => {
   // Wing: one "Bus" type that Mixing Station says can feed buses (signalTargets type 4).
   const busType = { type: 4, name: 'Bus', shortName: 'Mix', count: 3, offset: 48, signalTargets: [{ count: 16, channelType: { type: 4, stereo: true } }] };

@@ -65,6 +65,13 @@ export const DEFAULT_MS_CONFIG = {
   // Only a channel type named "Bus" that Mixing Station says can feed buses (the Wing);
   // dLive Mix/St Mix types are never sources.
   busSends: { enabled: true, namePattern: '^bus$' },
+  // Console groups as sources: on a dLive a group (horns, BGVs, drums) can be sent to an ear
+  // mix, and some shows feed the ears from the group instead of the channels. Phones get each
+  // group as kind "group" (Grp 1...) or, when Mixing Station lists stereo groups as their own
+  // type, "st_group" (St Grp 1...). Only group types that Mixing Station says can feed mixes
+  // (signalTargets type 4); `type` forces one channel type number when that list is missing.
+  // Mute groups and DCA groups never match.
+  groups: { enabled: true, type: null, namePattern: '^(st(ereo)?\\s*)?(grp|group)s?$' },
   // Gain and phantom for phones (unlocked one channel at a time in the app). Headamp gain where
   // the channel's source has one, else the channel trim. Only these channel kinds get it.
   preamps: { enabled: true, kinds: ['input', 'aux'] },
@@ -98,6 +105,8 @@ export const DEFAULT_MS_CONFIG = {
 };
 
 const MIX_TYPE = 4;
+// Default strip names until the console sends one.
+const KIND_LABEL = { input: 'Ch', fx_return: 'FX', ufx_return: 'UFX', aux: 'Aux', bus: 'Bus', group: 'Grp', st_group: 'St Grp' };
 
 /**
  * The console's own number for a mix: its place in the Mix channel group Mixing Station
@@ -131,6 +140,7 @@ export class MixingStationDriver extends EventEmitter {
       ufxReturns: { ...DEFAULT_MS_CONFIG.ufxReturns, ...(config.ufxReturns ?? {}) },
       auxInputs: { ...DEFAULT_MS_CONFIG.auxInputs, ...(config.auxInputs ?? {}) },
       busSends: { ...DEFAULT_MS_CONFIG.busSends, ...(config.busSends ?? {}) },
+      groups: { ...DEFAULT_MS_CONFIG.groups, ...(config.groups ?? {}) },
       preamps: { ...DEFAULT_MS_CONFIG.preamps, ...(config.preamps ?? {}) },
       stereoPairs: { ...DEFAULT_STEREO_PAIRS, ...(config.stereoPairs ?? {}) },
     };
@@ -496,12 +506,40 @@ export class MixingStationDriver extends EventEmitter {
     const auxType = addReturns(this.cfg.auxInputs, 'aux', 'Aux', (t) => !/send|snd/i.test(`${t.name ?? ''} ${t.shortName ?? ''}`));
     const feedsBuses = (t) => (t.signalTargets ?? []).some((s) => s?.channelType?.type === t.type);
     const busType = addReturns(this.cfg.busSends, 'bus', 'Bus', (t) => t.type === MIX_TYPE && feedsBuses(t));
+    const groupTypes = this.#addGroups(types, channels, offsetOf);
     const found = (t) => (t ? `type ${t.type} x${t.count}` : 'not found');
-    this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${found(fxType)}; UFX returns ${found(ufxType)}; aux inputs ${found(auxType)}; bus sends ${found(busType)}`), 'info');
+    this.#warn(new Error(`channel types: ${JSON.stringify(types.map(({ type, name, shortName, count, offset }) => ({ type, name, shortName, count, offset })))}; FX returns ${found(fxType)}; UFX returns ${found(ufxType)}; aux inputs ${found(auxType)}; bus sends ${found(busType)}; groups ${groupTypes.length ? groupTypes.map(found).join(', ') : 'not found'}`), 'info');
     for (const c of channels) c.preamp = this.#preampOf(c);
     this.channels = channels;
     this.byMs = new Map(channels.map((c) => [c.ms, c]));
     this.#relink();
+  }
+
+  // Groups that can feed a mix, after everything else. Mono groups are "Grp n"; a separate
+  // stereo type counts from 1 as "St Grp n", the way the console numbers them.
+  #addGroups(types, channels, offsetOf) {
+    const cfg = this.cfg.groups;
+    if (!cfg?.enabled) return [];
+    const pattern = new RegExp(cfg.namePattern, 'i');
+    const named = (t) => pattern.test(String(t.name ?? '').trim()) || pattern.test(String(t.shortName ?? '').trim());
+    const feedsMixes = (t) => (t.signalTargets ?? []).some((s) => s?.channelType?.type === MIX_TYPE);
+    const added = [];
+    types.forEach((t, index) => {
+      const wanted = Number.isInteger(cfg.type)
+        ? t.type === cfg.type
+        : t.type !== 0 && t.type !== MIX_TYPE && named(t) && feedsMixes(t);
+      if (!wanted || !(t.count > 0)) return;
+      const stereo = /^st/i.test(String(t.name ?? '').trim()) || /^st/i.test(String(t.shortName ?? '').trim());
+      const kind = stereo ? 'st_group' : 'group';
+      const first = channels.filter((c) => c.kind === kind).length;
+      const start = offsetOf(t, index);
+      for (let i = 0; i < t.count; i++) {
+        const number = first + i + 1;
+        channels.push({ ch: channels.length, ms: start + i, kind, number, name: `${KIND_LABEL[kind]} ${number}`, color: null, link: null });
+      }
+      added.push(t);
+    });
+    return added;
   }
 
   /** Recomputes linked pairs; returns the channels whose link changed. */
@@ -579,7 +617,7 @@ export class MixingStationDriver extends EventEmitter {
       const c = this.byMs.get(ch);
       if (c) {
         if (p[3] === 'name') {
-          c.name = v ? String(v) : `${{ input: 'Ch', fx_return: 'FX', ufx_return: 'UFX', aux: 'Aux', bus: 'Bus' }[c.kind] ?? c.kind} ${c.number}`;
+          c.name = v ? String(v) : `${KIND_LABEL[c.kind] ?? c.kind} ${c.number}`;
           // An empty name from the console (not just "no name yet") marks a stereo right half.
           c.blankName = v === '' || (typeof v === 'string' && !v.trim());
         }
