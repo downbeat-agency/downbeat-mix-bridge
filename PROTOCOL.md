@@ -58,7 +58,7 @@ On a Wing every bus can also feed other buses, so each bus is listed twice: as a
 
 ### Groups as sources (dLive)
 
-Some shows feed the ears from a console group (horns, BGVs, BGM) instead of from the channels. From 0.6.0 the bridge lists every group that Mixing Station says can feed a mix as a channel of kind `group` ("Grp 3"), or `st_group` ("St Grp 1") when stereo groups are their own type. They come after every other channel, have no gain, and their send into a mix works like any other channel's. Older bridges send none, so a show that used groups had sound in the ears with no fader on the phone.
+Some shows feed the ears from a console group (horns, BGVs, BGM) instead of from the channels. From 0.6.0 the bridge lists every group that feeds mixes (Mixing Station says so, or the console sent the group's send levels) as a channel of kind `group` ("Grp 3"), or `st_group` ("St Grp 1") when stereo groups are their own type. They come after every other channel, have no gain, and their send into a mix works like any other channel's. Older bridges send none, so a show that used groups had sound in the ears with no fader on the phone.
 
 ### Gain and phantom power
 

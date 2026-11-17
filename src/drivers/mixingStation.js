@@ -68,8 +68,9 @@ export const DEFAULT_MS_CONFIG = {
   // Console groups as sources: on a dLive a group (horns, BGVs, drums) can be sent to an ear
   // mix, and some shows feed the ears from the group instead of the channels. Phones get each
   // group as kind "group" (Grp 1...) or, when Mixing Station lists stereo groups as their own
-  // type, "st_group" (St Grp 1...). Only group types that Mixing Station says can feed mixes
-  // (signalTargets type 4); `type` forces one channel type number when that list is missing.
+  // type, "st_group" (St Grp 1...). A group type is kept when Mixing Station says it can feed
+  // mixes (signalTargets type 4) or, when it doesn't say, when the console sent a send level
+  // from a group into a mix during the first sync. `type` forces one channel type number.
   // Mute groups and DCA groups never match.
   groups: { enabled: true, type: null, namePattern: '^(st(ereo)?\\s*)?(grp|group)s?$' },
   // Gain and phantom for phones (unlocked one channel at a time in the app). Headamp gain where
@@ -194,7 +195,7 @@ export class MixingStationDriver extends EventEmitter {
       console: this.consoleName ?? 'Mixing Station',
       model: this.consoleModel ?? null,
       capabilities: this.capabilities,
-      channels: this.channels.map(({ ms, blankName, ...c }) => ({ ...c })),
+      channels: this.channels.map(({ ms, blankName, unconfirmed, ...c }) => ({ ...c })),
       buses: this.buses.map(({ bus, name, stereo, channel, number }) => ({ bus, name, stereo, ...(number ? { number } : {}), ...this.#selfOf(channel) })),
       values: new Map(this.values),
     };
@@ -409,10 +410,6 @@ export class MixingStationDriver extends EventEmitter {
       for (const p of [...preampPaths, 'ch.*.cfg.name', 'ch.*.cfg.color', 'ch.*.mix.sends.*.lvl', 'ch.*.mix.sends.*.on', 'ch.*.mix.sends.*.pan', 'ch.*.mix.lvl', 'ch.*.mix.on']) {
         this.#send({ path: '/console/data/subscribe', method: 'POST', body: { path: p, format: 'val' } });
       }
-      if (this.cfg.meters.enabled) {
-        const params = [...this.channels.map((c) => ({ type: 0, index: c.ms })), ...this.buses.map((b) => ({ type: 0, index: b.channel }))];
-        this.#send({ path: '/console/metering2/subscribe', method: 'POST', body: { id: 0, interval: this.cfg.meters.intervalMs, binary: false, params } });
-      }
       // Subscriptions answer with every current value straight away (thousands on a real show).
       // Wait for the stream to go quiet so phones never get a half-filled snapshot.
       const started = Date.now();
@@ -422,6 +419,12 @@ export class MixingStationDriver extends EventEmitter {
         await new Promise((r) => setTimeout(r, 100));
       }
       if (this.ws !== ws || ws?.readyState !== WebSocket.OPEN) return;
+      this.#dropSilentGroups();
+      // Meters after the channel list is final: frames follow its order.
+      if (this.cfg.meters.enabled) {
+        const params = [...this.channels.map((c) => ({ type: 0, index: c.ms })), ...this.buses.map((b) => ({ type: 0, index: b.channel }))];
+        this.#send({ path: '/console/metering2/subscribe', method: 'POST', body: { id: 0, interval: this.cfg.meters.intervalMs, binary: false, params } });
+      }
       this.connected = true;
       this.emit('status', { connected: true });
     } finally {
@@ -527,19 +530,45 @@ export class MixingStationDriver extends EventEmitter {
     types.forEach((t, index) => {
       const wanted = Number.isInteger(cfg.type)
         ? t.type === cfg.type
-        : t.type !== 0 && t.type !== MIX_TYPE && named(t) && feedsMixes(t);
+        : t.type !== 0 && t.type !== MIX_TYPE && named(t);
       if (!wanted || !(t.count > 0)) return;
+      // Mixing Station does not always say what a group can feed (dLive "St Group", Green rig,
+      // 2026-11-17). Those are listed for now and checked after the first sync: see #dropSilentGroups.
+      const confirmed = Number.isInteger(cfg.type) || feedsMixes(t);
       const stereo = /^st/i.test(String(t.name ?? '').trim()) || /^st/i.test(String(t.shortName ?? '').trim());
       const kind = stereo ? 'st_group' : 'group';
       const first = channels.filter((c) => c.kind === kind).length;
       const start = offsetOf(t, index);
       for (let i = 0; i < t.count; i++) {
         const number = first + i + 1;
-        channels.push({ ch: channels.length, ms: start + i, kind, number, name: `${KIND_LABEL[kind]} ${number}`, color: null, link: null });
+        channels.push({ ch: channels.length, ms: start + i, kind, number, name: `${KIND_LABEL[kind]} ${number}`, color: null, link: null, ...(confirmed ? {} : { unconfirmed: true }) });
       }
       added.push(t);
     });
     return added;
+  }
+
+  // After the first sync: groups Mixing Station did not vouch for stay only if the console
+  // sent a send level from one of them into a mix. If none did, groups can't feed mixes on
+  // this console and phones never see them. Groups are the last channels, so dropping them
+  // moves no other channel.
+  #dropSilentGroups() {
+    const unconfirmed = this.channels.filter((c) => c.unconfirmed);
+    if (!unconfirmed.length) return;
+    const sending = unconfirmed.some((c) => this.buses.some((b) => this.values.has(paramKey(b.bus, c.ch, 'level'))));
+    if (sending) {
+      for (const c of unconfirmed) delete c.unconfirmed;
+      this.#warn(new Error(`groups: ${unconfirmed.length} listed (the console sent their mix sends)`), 'info');
+      return;
+    }
+    const first = Math.min(...unconfirmed.map((c) => c.ch));
+    for (const key of [...this.values.keys()]) {
+      const ch = Number(String(key).split(':')[1]);
+      if (Number.isInteger(ch) && ch >= first) this.values.delete(key);
+    }
+    this.channels = this.channels.filter((c) => !c.unconfirmed);
+    this.byMs = new Map(this.channels.map((c) => [c.ms, c]));
+    this.#warn(new Error(`groups: ${unconfirmed.length} found but none sends to a mix; not shown to phones`), 'info');
   }
 
   /** Recomputes linked pairs; returns the channels whose link changed. */
@@ -624,7 +653,7 @@ export class MixingStationDriver extends EventEmitter {
         else c.color = this.cfg.colorMap[Math.round(Number(v))] ?? null;
         // A rename can make or break an L/R pair.
         const touched = new Set([c, ...(p[3] === 'name' ? this.#relink() : [])]);
-        this.#layout({ channels: [...touched].map(({ ms, blankName, ...pub }) => pub) });
+        this.#layout({ channels: [...touched].map(({ ms, blankName, unconfirmed, ...pub }) => pub) });
         // A Wing bus is both a mix and a source channel: rename the mix too.
         if (c.kind !== 'bus' || p[3] !== 'name') return;
       }
@@ -676,7 +705,7 @@ export class MixingStationDriver extends EventEmitter {
     const next = this.#preampOf(c);
     if (JSON.stringify(next) !== JSON.stringify(c.preamp)) {
       c.preamp = next;
-      const { ms: _ms, blankName, ...pub } = c;
+      const { ms: _ms, blankName, unconfirmed, ...pub } = c;
       this.#layout({ channels: [pub] });
     }
     if (!next) return;
