@@ -3,7 +3,7 @@
 How the Downbeat iOS app talks to the rig bridge. One WebSocket per phone, JSON text messages.
 
 - Endpoint: `ws://<mac-mini>:8790/v1/mix`
-- Discovery on macOS rigs: Bonjour service `_downbeatmix._tcp` (TXT `rig=<name>`)
+- Discovery on macOS rigs: Bonjour service `_downbeatmix._tcp` (TXT `rig=<name>`, `addrs=<ipv4>,<ipv4>`). `addrs` lists the rig Mac's IPv4 addresses (0.6.2+). When several rigs answer (the office, where every rack is also on the office network), a phone connects to the rig with an address on its own Wi-Fi subnet, at that address.
 - Health: `GET http://<mac-mini>:8790/health`
 
 Indices are zero-based: `ch: 0` is channel 1, `bus: 0` is Stereo Mix 1. Levels are dB; `null` means off (-inf); max +10. Pan is -1 (L) to 1 (R). `ch: null` means the bus master.

@@ -3,9 +3,11 @@
 import { createServer } from 'node:http';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Updater, confirmUpdate, lastUpdate } from './updater.js';
+import { advertTxt, localIPv4 } from './advert.js';
 import { StatusReporter } from './statusReport.js';
 import { attachWebSocket } from './wsServer.js';
 import { Bridge } from './bridge.js';
@@ -67,6 +69,11 @@ if (args.config && config.update?.enabled !== false) {
     config: config.update ?? {},
     isIdle: () => bridge.isIdle(config.update?.idleMs ?? 10 * 60 * 1000),
     log,
+    // Stop the announcement before the launcher starts the new version, or it outlives this process.
+    exit: (code) => {
+      advert?.kill();
+      process.exit(code);
+    },
     onChecked: async (result) => reporter.report(result, await lastUpdate(installDir)),
   });
   updater.start();
@@ -75,10 +82,23 @@ if (args.config && config.update?.enabled !== false) {
 setTimeout(() => confirmUpdate(installDir), 2 * 60 * 1000).unref();
 
 // Let phones find the bridge on the rig Wi-Fi without typing an IP (macOS has dns-sd built in).
+// The announcement lists this Mac's IPv4 addresses (addrs=…), so a phone that hears several
+// rigs (the office, where every rack is on the office network) picks the one on its own Wi-Fi.
+// Addresses can change (DHCP, a cable moved), so the announcement is renewed when they do.
 let advert = null;
-if (process.platform === 'darwin' && config.bonjour !== false) {
-  advert = spawn('dns-sd', ['-R', `Downbeat Mix ${rigName}`, '_downbeatmix._tcp', 'local', String(port), `rig=${rigName}`], { stdio: 'ignore' });
+let advertAddrs = '';
+function advertise() {
+  const addrs = localIPv4(networkInterfaces()).join(',');
+  if (advert && addrs === advertAddrs) return;
+  advert?.kill();
+  advertAddrs = addrs;
+  advert = spawn('dns-sd', ['-R', `Downbeat Mix ${rigName}`, '_downbeatmix._tcp', 'local', String(port), ...advertTxt(rigName, addrs)], { stdio: 'ignore' });
   advert.on('error', () => log('bonjour advertisement unavailable'));
+  log(`bonjour: announcing ${rigName} at ${addrs || 'no IPv4 address'}`);
+}
+if (process.platform === 'darwin' && config.bonjour !== false) {
+  advertise();
+  setInterval(advertise, 30 * 1000).unref();
 }
 
 const shutdown = async () => {

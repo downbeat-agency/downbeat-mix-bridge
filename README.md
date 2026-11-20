@@ -66,7 +66,7 @@ One bundle for all rigs. Each rig Mac Mini runs Mixing Station desktop (API on p
 Also on each rig:
 - Mixing Station must start at login and connect to the console by itself, with the API on 8091 (8080 clashes with UniFi).
 - Energy settings → never sleep; turn off automatic macOS updates.
-- Phones reach the bridge at `ws://<mac>:8790/v1/mix` (the app defaults to 10.0.30.10). The bridge also advertises `_downbeatmix._tcp` over Bonjour.
+- Phones reach the bridge at `ws://<mac>:8790/v1/mix`. The bridge advertises `_downbeatmix._tcp` over Bonjour with its rig name and its IPv4 addresses (`addrs=`), renewed when they change, so a phone that hears several rigs (the office) picks the one on its own Wi-Fi.
 - Health: `curl http://localhost:8790/health` shows rig, console model, connected phones and write counters.
 
 **Updates (no one touches the Mac Minis):** the bridge checks this repo's latest GitHub release every 12 hours (first check 2 minutes after start). If it is newer, and no phone has been connected for 10 minutes, it downloads `DownbeatMixBridge.tar.gz`, checks it against `SHA256SUMS`, swaps it in (the old version stays as `mix-bridge.previous`) and restarts. At gigs there is no internet, so the check just fails quietly; rigs update during the week at the warehouse. `deploy/launcher.js` (what the LaunchAgent runs) restarts the bridge after an update and, if the new version crashes three times within a minute of starting, puts the previous one back; that release is then skipped until a newer one comes out. Turn it off per rig with `"update": { "enabled": false }` in `config.json`.
